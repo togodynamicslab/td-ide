@@ -22,6 +22,7 @@ import {
   setConversationWorktreePath,
   getConversationWorktreePath,
   deleteConversation,
+  deleteArchivedConversations,
   getMessagesByConversation,
   insertMessage,
   updateMessage,
@@ -152,6 +153,11 @@ ipcMain.handle('db:get-conversation-worktree', (_event, { id }: { id: string }) 
 
 ipcMain.handle('db:delete-conversation', (_event, { id }: { id: string }) => {
   deleteConversation(id)
+  return true
+})
+
+ipcMain.handle('db:delete-archived-conversations', (_event, { projectId }: { projectId: string }) => {
+  deleteArchivedConversations(projectId)
   return true
 })
 
@@ -541,6 +547,28 @@ ipcMain.handle('process:kill-orphan', (_event, { pid }: { pid: number }) => {
     return { success: true }
   } catch {
     return { success: false }
+  }
+})
+
+ipcMain.handle('process:get-memory-usage', () => {
+  const mainMemory = process.memoryUsage()
+  const claudeProcs: { conversationId: string; rss: number }[] = []
+  for (const [convId, proc] of claudeProcesses) {
+    if (proc.pid) {
+      try {
+        const rss = parseInt(
+          require('child_process').execSync(`ps -o rss= -p ${proc.pid}`, { encoding: 'utf8' }).trim(),
+          10
+        ) * 1024 // ps reports in KB
+        claudeProcs.push({ conversationId: convId, rss })
+      } catch {
+        // Process may have exited
+      }
+    }
+  }
+  return {
+    main: { rss: mainMemory.rss, heapUsed: mainMemory.heapUsed, heapTotal: mainMemory.heapTotal },
+    claude: claudeProcs
   }
 })
 

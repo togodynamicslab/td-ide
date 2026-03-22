@@ -86,11 +86,12 @@ function App(): JSX.Element {
   const [gitBranch, setGitBranch] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false)
+  const [planContent, setPlanContent] = useState('')
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(300)
   const [useWorktree, setUseWorktree] = useState(false)
   const [interruptedConvIds, setInterruptedConvIds] = useState<Set<string>>(new Set())
-  const [stateRestored, setStateRestored] = useState(false)
+  const stateRestored = useRef(false)
 
   // Per-conversation plan content
   const planDrafts = useRef(new Map<string, string>())
@@ -103,6 +104,8 @@ function App(): JSX.Element {
   const messagesCache = useRef(new Map<string, Message[]>())
   // Store final assistant text per conversation for notification (buffer gets deleted before handleDone)
   const finalTexts = useRef(new Map<string, string>())
+  // Track permission mode per conversation so handleDone can check plan mode after buffer is deleted
+  const convPermissionModes = useRef(new Map<string, PermissionMode>())
   // Per-conversation message queue for queuing messages while Claude is working
   const messageQueue = useRef(new Map<string, { text: string; images: ImageAttachment[] }[]>())
   // Stable ref for processMessage so handleDone inside useEffect can call the latest version
@@ -127,9 +130,11 @@ function App(): JSX.Element {
     })
   }, [activeConversationId])
 
-  // --- Load projects from DB on mount ---
+  // --- Load projects from DB on mount, then restore saved state ---
   useEffect(() => {
-    window.api.getProjects().then((rows) => {
+    const init = async () => {
+      // Load projects
+      const rows = await window.api.getProjects()
       const loaded: Project[] = (rows as { id: string; name: string; path: string; createdAt: Date }[]).map((r) => ({
         id: r.id,
         name: r.name,
@@ -138,8 +143,70 @@ function App(): JSX.Element {
         createdAt: r.createdAt
       }))
       setProjects(loaded)
-    })
+
+      // Restore saved UI state
+      const state = await window.api.getAllAppState()
+      if (state.activeProjectId && loaded.some((p) => p.id === state.activeProjectId)) {
+        setActiveProjectId(state.activeProjectId)
+      }
+      if (state.activeConversationId) {
+        setActiveConversationId(state.activeConversationId)
+      }
+      if (state.selectedModel && ['opus', 'sonnet', 'haiku'].includes(state.selectedModel)) {
+        setSelectedModel(state.selectedModel as ModelId)
+      }
+      if (state.effortLevel && ['low', 'medium', 'high', 'max'].includes(state.effortLevel)) {
+        setEffortLevel(state.effortLevel as EffortLevel)
+      }
+      if (state.terminalOpen === 'true') {
+        setTerminalOpen(true)
+      }
+
+      // Detect interrupted sessions from previous run
+      const interrupted = await window.api.getInterruptedProcesses()
+      if (interrupted.length > 0) {
+        const ids = new Set<string>()
+        for (const proc of interrupted) {
+          ids.add(proc.conversationId)
+          // Kill any orphaned processes that are still alive
+          if (proc.alive) {
+            await window.api.killOrphanProcess(proc.pid)
+          }
+        }
+        setInterruptedConvIds(ids)
+      }
+
+      setStateRestored(true)
+    }
+    init()
   }, [])
+
+  // --- Auto-save UI state to DB on changes ---
+  useEffect(() => {
+    if (!stateRestored) return
+    if (activeProjectId) window.api.setAppState('activeProjectId', activeProjectId)
+  }, [activeProjectId, stateRestored])
+
+  useEffect(() => {
+    if (!stateRestored) return
+    if (activeConversationId) window.api.setAppState('activeConversationId', activeConversationId)
+    else window.api.setAppState('activeConversationId', '')
+  }, [activeConversationId, stateRestored])
+
+  useEffect(() => {
+    if (!stateRestored) return
+    window.api.setAppState('selectedModel', selectedModel)
+  }, [selectedModel, stateRestored])
+
+  useEffect(() => {
+    if (!stateRestored) return
+    window.api.setAppState('effortLevel', effortLevel)
+  }, [effortLevel, stateRestored])
+
+  useEffect(() => {
+    if (!stateRestored) return
+    window.api.setAppState('terminalOpen', terminalOpen ? 'true' : 'false')
+  }, [terminalOpen, stateRestored])
 
   // --- Load conversations when project changes ---
   useEffect(() => {
@@ -458,6 +525,15 @@ function App(): JSX.Element {
 
       // Initialize per-conversation buffer
       buffers.current.set(convId, { text: '', tools: [], reasoning: '', contentBlocks: [], assistantMsgId, startedAt: Date.now(), permissionMode })
+      convPermissionModes.current.set(convId, permissionMode)
+
+      // Clear interrupted state when user sends a new message
+      setInterruptedConvIds((prev) => {
+        if (!prev.has(convId!)) return prev
+        const next = new Set(prev)
+        next.delete(convId!)
+        return next
+      })
 
       setLoadingConvs((prev) => new Set(prev).add(convId!))
       // Use worktree path if the conversation has one, otherwise project path
@@ -603,8 +679,23 @@ function App(): JSX.Element {
         const duration = Date.now() - buf.startedAt
         updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
         window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration, JSON.stringify(buf.contentBlocks))
+
+        // Fallback: open plan sidebar if result event didn't trigger it
+        if (buf.permissionMode === 'plan' && buf.text.trim()) {
+          planDrafts.current.set(conversationId, buf.text)
+          setPlanSidebarOpen(true)
+        }
+
         buffers.current.delete(conversationId)
       }
+
+      // Final fallback: check stored permission mode even if buffer was already deleted by result handler
+      const convMode = convPermissionModes.current.get(conversationId)
+      if (convMode === 'plan' && assistantText.trim() && !planDrafts.current.has(conversationId)) {
+        planDrafts.current.set(conversationId, assistantText)
+        setPlanSidebarOpen(true)
+      }
+      convPermissionModes.current.delete(conversationId)
       setLoadingConvs((prev) => {
         const next = new Set(prev)
         next.delete(conversationId)
@@ -774,6 +865,21 @@ function App(): JSX.Element {
     }
   }, [activeConversationId])
 
+  const handleDeleteAllArchived = useCallback(async (projectId: string) => {
+    await window.api.deleteArchivedConversations(projectId)
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== projectId) return p
+        const archived = p.conversations.filter((c) => c.archived)
+        for (const c of archived) loadedConvs.current.delete(c.id)
+        if (activeConversationId && archived.some((c) => c.id === activeConversationId)) {
+          setActiveConversationId(null)
+        }
+        return { ...p, conversations: p.conversations.filter((c) => !c.archived) }
+      })
+    )
+  }, [activeConversationId])
+
   const handleNewChatForProject = useCallback((projectId: string) => {
     setActiveProjectId(projectId)
     setActiveConversationId(null)
@@ -839,6 +945,7 @@ function App(): JSX.Element {
         activeProjectId={activeProjectId}
         activeConversationId={activeConversationId}
         loadingConversations={loadingConvs}
+        interruptedConversations={interruptedConvIds}
         queuedCounts={new Map(Array.from(messageQueue.current.entries()).map(([k, v]) => [k, v.length]))}
         onSelectProject={setActiveProjectId}
         onSelectConversation={setActiveConversationId}
@@ -849,6 +956,7 @@ function App(): JSX.Element {
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
         onArchiveConversation={handleArchiveConversation}
+        onDeleteAllArchived={handleDeleteAllArchived}
         onNewChatForProject={handleNewChatForProject}
         onOpenSettings={() => setSettingsOpen(true)}
       />
@@ -876,6 +984,19 @@ function App(): JSX.Element {
                     messages={activeConversation?.messages || []}
                     isLoading={isLoading}
                     permissionMode={permissionMode}
+                    isInterrupted={activeConversationId ? interruptedConvIds.has(activeConversationId) : false}
+                    onResumeInterrupted={() => {
+                      handleSend('Continue from where you left off. The previous session was interrupted.')
+                    }}
+                    onDismissInterrupted={() => {
+                      if (activeConversationId) {
+                        setInterruptedConvIds((prev) => {
+                          const next = new Set(prev)
+                          next.delete(activeConversationId)
+                          return next
+                        })
+                      }
+                    }}
                   />
                 </div>
                 {terminalOpen && (

@@ -15,9 +15,11 @@ import {
   CheckCircle2,
   Archive,
   ArchiveRestore,
-  GitFork
+  GitFork,
+  AlertTriangle
 } from 'lucide-react'
 import WindowControls from './WindowControls'
+import MemoryIndicator from './StatusBar'
 import { Button } from './ui/button'
 import {
   Sidebar,
@@ -60,6 +62,7 @@ interface AppSidebarProps {
   activeProjectId: string | null
   activeConversationId: string | null
   loadingConversations: Set<string>
+  interruptedConversations?: Set<string>
   queuedCounts: Map<string, number>
   onSelectProject: (id: string) => void
   onSelectConversation: (id: string) => void
@@ -70,12 +73,13 @@ interface AppSidebarProps {
   onRenameConversation: (id: string, title: string) => void
   onDeleteConversation: (id: string) => void
   onArchiveConversation?: (id: string, archived: boolean) => void
+  onDeleteAllArchived?: (projectId: string) => void
   onNewChatForProject: (projectId: string) => void
   onOpenSettings: () => void
 }
 
 interface DeleteTarget {
-  type: 'project' | 'conversation'
+  type: 'project' | 'conversation' | 'all-archived'
   id: string
   name: string
 }
@@ -85,6 +89,7 @@ function AppSidebar({
   activeProjectId,
   activeConversationId,
   loadingConversations,
+  interruptedConversations,
   queuedCounts,
   onSelectProject,
   onSelectConversation,
@@ -95,6 +100,7 @@ function AppSidebar({
   onRenameConversation,
   onDeleteConversation,
   onArchiveConversation,
+  onDeleteAllArchived,
   onNewChatForProject,
   onOpenSettings
 }: AppSidebarProps): JSX.Element {
@@ -191,6 +197,8 @@ function AppSidebar({
     if (!deleteTarget) return
     if (deleteTarget.type === 'project') {
       onDeleteProject(deleteTarget.id)
+    } else if (deleteTarget.type === 'all-archived') {
+      onDeleteAllArchived?.(deleteTarget.id)
     } else {
       onDeleteConversation(deleteTarget.id)
     }
@@ -327,6 +335,8 @@ function AppSidebar({
                                     <Loader2 className="h-3 w-3 shrink-0 text-td-accent animate-spin" />
                                   ) : recentlyFinished.has(conv.id) ? (
                                     <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />
+                                  ) : interruptedConversations?.has(conv.id) ? (
+                                    <AlertTriangle className="h-3 w-3 shrink-0 text-amber-400" />
                                   ) : (
                                     conv.worktreePath
                                       ? <GitFork className="h-3 w-3 shrink-0 text-purple-400" />
@@ -353,6 +363,8 @@ function AppSidebar({
                                         </span>
                                       ) : recentlyFinished.has(conv.id) ? (
                                         <span className="text-[10px] text-emerald-400 shrink-0">Done</span>
+                                      ) : interruptedConversations?.has(conv.id) ? (
+                                        <span className="text-[10px] text-amber-400 shrink-0">Interrupted</span>
                                       ) : (
                                         <span className="text-[10px] text-td-muted shrink-0">
                                           {formatTime(conv.createdAt)}
@@ -403,19 +415,38 @@ function AppSidebar({
                             {archivedConvs.length > 0 && (
                               <>
                                 <SidebarMenuSubItem>
-                                  <button
-                                    onClick={() => setShowArchived((prev) => {
-                                      const next = new Set(prev)
-                                      if (next.has(project.id)) next.delete(project.id)
-                                      else next.add(project.id)
-                                      return next
-                                    })}
-                                    className="flex items-center gap-2 w-full px-2 py-1 text-[11px] text-td-muted hover:bg-td-hover rounded-sm transition-colors"
-                                  >
-                                    {isArchivedOpen ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
-                                    <Archive className="h-3 w-3" />
-                                    <span>Archived ({archivedConvs.length})</span>
-                                  </button>
+                                  <ContextMenu>
+                                    <ContextMenuTrigger asChild>
+                                      <button
+                                        onClick={() => setShowArchived((prev) => {
+                                          const next = new Set(prev)
+                                          if (next.has(project.id)) next.delete(project.id)
+                                          else next.add(project.id)
+                                          return next
+                                        })}
+                                        className="flex items-center gap-2 w-full px-2 py-1 text-[11px] text-td-muted hover:bg-td-hover rounded-sm transition-colors"
+                                      >
+                                        {isArchivedOpen ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
+                                        <Archive className="h-3 w-3" />
+                                        <span>Archived ({archivedConvs.length})</span>
+                                      </button>
+                                    </ContextMenuTrigger>
+                                    <ContextMenuContent>
+                                      <ContextMenuItem
+                                        onClick={() =>
+                                          setDeleteTarget({
+                                            type: 'all-archived',
+                                            id: project.id,
+                                            name: `${archivedConvs.length} archived chat${archivedConvs.length === 1 ? '' : 's'}`
+                                          })
+                                        }
+                                        className="text-red-400 focus:text-red-300"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5 mr-2" />
+                                        Delete all archived
+                                      </ContextMenuItem>
+                                    </ContextMenuContent>
+                                  </ContextMenu>
                                 </SidebarMenuSubItem>
                                 {isArchivedOpen && archivedConvs.map(renderConvItem)}
                               </>
@@ -436,6 +467,7 @@ function AppSidebar({
 
         {/* Footer */}
         <SidebarFooter>
+          <MemoryIndicator />
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton onClick={toggleTheme} tooltip={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
@@ -457,13 +489,15 @@ function AppSidebar({
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogTitle>
-            Delete {deleteTarget?.type === 'project' ? 'project' : 'chat'}
+            Delete {deleteTarget?.type === 'project' ? 'project' : deleteTarget?.type === 'all-archived' ? 'all archived chats' : 'chat'}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            Are you sure you want to delete &quot;{deleteTarget?.name}&quot;?
-            {deleteTarget?.type === 'project'
-              ? ' This will also delete all conversations in this project.'
-              : ' All messages in this chat will be permanently removed.'}
+            {deleteTarget?.type === 'all-archived'
+              ? `Are you sure you want to delete ${deleteTarget.name}? All messages will be permanently removed.`
+              : <>Are you sure you want to delete &quot;{deleteTarget?.name}&quot;?
+                {deleteTarget?.type === 'project'
+                  ? ' This will also delete all conversations in this project.'
+                  : ' All messages in this chat will be permanently removed.'}</>}
             {' '}This action cannot be undone.
           </AlertDialogDescription>
           <div className="flex justify-end gap-2 mt-4">

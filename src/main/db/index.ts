@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
-import { eq, inArray } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import * as schema from './schema'
 
 let db: ReturnType<typeof drizzle>
@@ -194,6 +194,18 @@ export function deleteConversation(id: string) {
   return db.delete(schema.conversations).where(eq(schema.conversations.id, id)).run()
 }
 
+export function deleteArchivedConversations(projectId: string) {
+  return db
+    .delete(schema.conversations)
+    .where(
+      and(
+        eq(schema.conversations.projectId, projectId),
+        eq(schema.conversations.archived, true)
+      )
+    )
+    .run()
+}
+
 // --- Messages ---
 
 export function getMessagesByConversation(conversationId: string) {
@@ -247,11 +259,10 @@ export function getAppState(key: string): string | null {
 }
 
 export function setAppState(key: string, value: string) {
-  // upsert
-  sqlite.exec(
-    `INSERT INTO app_state (key, value) VALUES ('${key.replace(/'/g, "''")}', '${value.replace(/'/g, "''")}')
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  )
+  db.insert(schema.appState)
+    .values({ key, value })
+    .onConflictDoUpdate({ target: schema.appState.key, set: { value } })
+    .run()
 }
 
 export function getAllAppState(): Record<string, string> {
@@ -268,10 +279,13 @@ export function deleteAppState(key: string) {
 // --- Active Processes (track running Claude PIDs) ---
 
 export function registerActiveProcess(conversationId: string, pid: number) {
-  sqlite.exec(
-    `INSERT INTO active_processes (conversation_id, pid, started_at) VALUES ('${conversationId}', ${pid}, ${Date.now()})
-     ON CONFLICT(conversation_id) DO UPDATE SET pid = excluded.pid, started_at = excluded.started_at`
-  )
+  db.insert(schema.activeProcesses)
+    .values({ conversationId, pid, startedAt: new Date() })
+    .onConflictDoUpdate({
+      target: schema.activeProcesses.conversationId,
+      set: { pid, startedAt: new Date() }
+    })
+    .run()
 }
 
 export function removeActiveProcess(conversationId: string) {
@@ -283,5 +297,5 @@ export function getAllActiveProcesses() {
 }
 
 export function clearAllActiveProcesses() {
-  return sqlite.exec('DELETE FROM active_processes')
+  return db.delete(schema.activeProcesses).run()
 }

@@ -122,6 +122,9 @@ const api = {
   deleteConversation: (id: string): Promise<boolean> => {
     return ipcRenderer.invoke('db:delete-conversation', { id })
   },
+  deleteArchivedConversations: (projectId: string): Promise<boolean> => {
+    return ipcRenderer.invoke('db:delete-archived-conversations', { projectId })
+  },
 
   // DB — Messages
   getMessages: (conversationId: string): Promise<unknown[]> => {
@@ -177,6 +180,12 @@ const api = {
   },
   getAllAppState: (): Promise<Record<string, string>> => {
     return ipcRenderer.invoke('state:get-all')
+  },
+  getMemoryUsage: (): Promise<{
+    main: { rss: number; heapUsed: number; heapTotal: number }
+    claude: { conversationId: string; rss: number }[]
+  }> => {
+    return ipcRenderer.invoke('process:get-memory-usage')
   },
   getInterruptedProcesses: (): Promise<{ conversationId: string; pid: number; startedAt: number; alive: boolean }[]> => {
     return ipcRenderer.invoke('process:get-interrupted')

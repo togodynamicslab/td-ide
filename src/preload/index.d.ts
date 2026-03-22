@@ -61,6 +61,7 @@ interface ClaudeAPI {
   setConversationWorktree: (id: string, worktreePath: string | null) => Promise<boolean>
   getConversationWorktree: (id: string) => Promise<string | null>
   deleteConversation: (id: string) => Promise<boolean>
+  deleteArchivedConversations: (projectId: string) => Promise<boolean>
 
   // DB — Messages
   getMessages: (conversationId: string) => Promise<unknown[]>
@@ -75,6 +76,10 @@ interface ClaudeAPI {
   getAppState: (key: string) => Promise<string | null>
   setAppState: (key: string, value: string) => Promise<boolean>
   getAllAppState: () => Promise<Record<string, string>>
+  getMemoryUsage: () => Promise<{
+    main: { rss: number; heapUsed: number; heapTotal: number }
+    claude: { conversationId: string; rss: number }[]
+  }>
   getInterruptedProcesses: () => Promise<{ conversationId: string; pid: number; startedAt: number; alive: boolean }[]>
   killOrphanProcess: (pid: number) => Promise<{ success: boolean }>
 
