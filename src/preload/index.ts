@@ -78,6 +78,14 @@ const api = {
     return ipcRenderer.invoke('shell:execute', { command, cwd })
   },
 
+  // File operations
+  readFileContent: (filePath: string): Promise<{ content: string; exists: boolean }> => {
+    return ipcRenderer.invoke('fs:read-file', { filePath })
+  },
+  writeFileContent: (filePath: string, content: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('fs:write-file', { filePath, content })
+  },
+
   // File picker
   openFile: (cwd: string): Promise<string[] | null> => {
     return ipcRenderer.invoke('dialog:openFile', { cwd })

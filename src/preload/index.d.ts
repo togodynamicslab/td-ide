@@ -11,6 +11,10 @@ interface ClaudeAPI {
   sendMessage: (message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools?: string[], apiKey?: string, apiProvider?: string) => void
   cancelMessage: (conversationId: string) => void
 
+  // File operations
+  readFileContent: (filePath: string) => Promise<{ content: string; exists: boolean }>
+  writeFileContent: (filePath: string, content: string) => Promise<{ success: boolean; error?: string }>
+
   // Dialog / files
   openFolder: () => Promise<string | null>
   openFile: (cwd: string) => Promise<string[] | null>

@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Notification } from 'electron'
 import { join } from 'path'
-import { writeFileSync, mkdirSync, existsSync } from 'fs'
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { spawn, ChildProcess, execSync } from 'child_process'
 import * as pty from 'node-pty'
@@ -100,6 +100,29 @@ ipcMain.handle('image:save', async (_event, { dataUrl, filename }: { dataUrl: st
   const filePath = join(tmpDir, `${Date.now()}-${filename}`)
   writeFileSync(filePath, Buffer.from(base64, 'base64'))
   return filePath
+})
+
+// --- File operations ---
+
+ipcMain.handle('fs:read-file', async (_event, { filePath }: { filePath: string }) => {
+  try {
+    if (!existsSync(filePath)) return { content: '', exists: false }
+    const content = readFileSync(filePath, 'utf-8')
+    return { content, exists: true }
+  } catch {
+    return { content: '', exists: false }
+  }
+})
+
+ipcMain.handle('fs:write-file', async (_event, { filePath, content }: { filePath: string; content: string }) => {
+  try {
+    const dir = join(filePath, '..')
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(filePath, content, 'utf-8')
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: String((err as Error).message || err) }
+  }
 })
 
 // --- DB IPC handlers ---
@@ -577,7 +600,8 @@ ipcMain.handle('process:get-memory-usage', () => {
 const PERMISSION_MAP: Record<string, string> = {
   full: 'bypassPermissions',
   default: 'default',
-  plan: 'plan'
+  plan: 'plan',
+  approve: 'default'
 }
 
 function launchClaude(message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools: string[] = [], apiKey = '', apiProvider = 'anthropic'): void {
@@ -647,6 +671,11 @@ function launchClaude(message: string, conversationId: string, cwd: string, mode
             }
           }
 
+          if (parsed.type === 'result') {
+            console.log('[td-ide] RESULT event | conv:', conversationId, '| is_error:', parsed.is_error, '| subtype:', parsed.subtype, '| num_turns:', parsed.num_turns)
+          } else {
+            console.log('[td-ide] stream |', parsed.type, parsed.subtype || '')
+          }
           sendToRenderer('claude:stream', { conversationId, data: parsed })
         } catch {
           // non-JSON output, ignore
@@ -656,10 +685,16 @@ function launchClaude(message: string, conversationId: string, cwd: string, mode
   })
 
   proc.stderr?.on('data', (data: Buffer) => {
-    const text = data.toString()
-    if (text.trim()) {
-      sendToRenderer('claude:error', { conversationId, error: text })
-    }
+    const text = data.toString().trim()
+    if (!text) return
+    // Filter out ANSI escape sequences and common non-error stderr output
+    const cleaned = text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim()
+    if (!cleaned) return
+    // Only forward actual errors, not progress/status chatter
+    const isNoise = /^(Compiling|Bundling|Building|Watching|Done in|✓|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|\s*$)/.test(cleaned)
+    if (isNoise) return
+    console.log('[td-ide] stderr:', cleaned.slice(0, 200))
+    sendToRenderer('claude:error', { conversationId, error: cleaned })
   })
 
   proc.on('close', (code) => {

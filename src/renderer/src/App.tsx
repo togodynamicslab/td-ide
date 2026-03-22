@@ -10,6 +10,7 @@ import SettingsPage from './components/SettingsPage'
 import TerminalPanel from './components/TerminalPanel'
 import ResizeHandle from './components/ResizeHandle'
 import UsageDialog from './components/UsageDialog'
+// ApprovalWidget is rendered inline in ChatArea
 
 export interface ToolBlock {
   id: string
@@ -60,7 +61,7 @@ export interface Project {
 
 export type ModelId = 'opus' | 'sonnet' | 'haiku'
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max'
-export type PermissionMode = 'full' | 'default' | 'plan'
+export type PermissionMode = 'full' | 'default' | 'plan' | 'approve'
 export type ApiProvider = 'anthropic' | 'openrouter'
 export type ApiMode = 'subscription' | 'apikey'
 
@@ -83,6 +84,12 @@ export interface ConversationUsage {
   durationMs: number
   modelUsage: Record<string, ModelUsageEntry>
   rateLimitResetsAt?: number
+}
+
+export interface DeniedTool {
+  tool_name: string
+  tool_use_id: string
+  tool_input: Record<string, unknown>
 }
 
 interface StreamBuffer {
@@ -111,6 +118,8 @@ function App(): JSX.Element {
   const [permissionDenied, setPermissionDenied] = useState(false)
   const [deniedCount, setDeniedCount] = useState(0)
   const [deniedConversationId, setDeniedConversationId] = useState<string | null>(null)
+  const [pendingApprovals, setPendingApprovals] = useState<DeniedTool[]>([])
+  const [approvalConvId, setApprovalConvId] = useState<string | null>(null)
   const [gitBranch, setGitBranch] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false)
@@ -120,7 +129,7 @@ function App(): JSX.Element {
   const [useWorktree, setUseWorktree] = useState(false)
   const [interruptedConvIds, setInterruptedConvIds] = useState<Set<string>>(new Set())
   const [usageOpen, setUsageOpen] = useState(false)
-  const stateRestored = useRef(false)
+  const [stateRestored, setStateRestored] = useState(false)
 
   // Per-conversation usage tracking
   const usageMap = useRef(new Map<string, ConversationUsage>())
@@ -668,27 +677,68 @@ function App(): JSX.Element {
       }
 
       if (c.type === 'assistant' && c.message) {
+        // assistant events are snapshots of the current turn's content (not cumulative across turns).
+        // They drop blocks from previous phases (e.g. thinking is gone once text starts).
+        // Only use these to pick up tool_use blocks (which have no delta equivalent).
         const msg = c.message as Record<string, unknown>
         if (msg.content && Array.isArray(msg.content)) {
+          // Also pick up text/thinking from assistant snapshots if we haven't captured any via deltas yet
+          // (fallback for cases where stream_events aren't delivered)
+          let hasNewText = false
           for (const block of msg.content) {
             const b = block as Record<string, unknown>
-            if (b.type === 'text' && typeof b.text === 'string') {
-              buf.text += b.text
+            if (b.type === 'text' && typeof b.text === 'string' && !buf.text) {
+              buf.text = b.text
               appendBlock('text', b.text)
-            } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
-              buf.reasoning += b.thinking
+              hasNewText = true
+            } else if (b.type === 'thinking' && typeof b.thinking === 'string' && !buf.reasoning) {
+              buf.reasoning = b.thinking
               appendBlock('thinking', b.thinking)
-            } else if (b.type === 'tool_use') {
-              const tool: ToolBlock = {
-                id: (b.id as string) || Date.now().toString(),
-                name: (b.name as string) || 'Unknown',
-                input: (b.input as Record<string, unknown>) || {}
+              hasNewText = true
+            }
+          }
+
+          const seenToolIds = new Set(buf.tools.map((t) => t.id))
+          for (const block of msg.content) {
+            const b = block as Record<string, unknown>
+            if (b.type === 'tool_use' && b.id) {
+              const toolId = b.id as string
+              if (!seenToolIds.has(toolId)) {
+                const tool: ToolBlock = {
+                  id: toolId,
+                  name: (b.name as string) || 'Unknown',
+                  input: (b.input as Record<string, unknown>) || {}
+                }
+                buf.tools.push(tool)
+                buf.contentBlocks.push({ type: 'tool_use', tool })
+                seenToolIds.add(toolId)
+              } else {
+                // Update existing tool's input (may become more complete in later snapshots)
+                const existing = buf.tools.find((t) => t.id === toolId)
+                if (existing && b.input) {
+                  existing.input = b.input as Record<string, unknown>
+                }
               }
-              buf.tools.push(tool)
-              buf.contentBlocks.push({ type: 'tool_use', tool })
             }
           }
           updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
+        }
+      } else if (c.type === 'stream_event') {
+        // Handle the raw Anthropic API stream events for real-time content
+        const event = c.event as Record<string, unknown> | undefined
+        if (!event) return
+
+        if (event.type === 'content_block_delta') {
+          const delta = event.delta as Record<string, unknown> | undefined
+          if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+            buf.text += delta.text
+            appendBlock('text', delta.text)
+            updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
+          } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+            buf.reasoning += delta.thinking
+            appendBlock('thinking', delta.thinking)
+            updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
+          }
         }
       } else if (c.type === 'content_block_delta') {
         const delta = c.delta as Record<string, unknown> | undefined
@@ -703,6 +753,7 @@ function App(): JSX.Element {
         }
       } else if (c.type === 'result') {
         const duration = Date.now() - buf.startedAt
+        console.log('[plan-debug] result event |', { convId: conversationId, permissionMode: buf.permissionMode, bufTextLen: buf.text.length, resultType: typeof c.result, resultLen: typeof c.result === 'string' ? (c.result as string).length : 0 })
         if (typeof c.result === 'string') {
           buf.text = c.result as string
           // Rebuild contentBlocks for result override — result replaces all text
@@ -712,7 +763,9 @@ function App(): JSX.Element {
         updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
 
         // Auto-capture plan content when in plan mode
+        console.log('[plan-debug] plan check |', { permissionMode: buf.permissionMode, hasText: !!buf.text.trim(), willOpen: buf.permissionMode === 'plan' && !!buf.text.trim() })
         if (buf.permissionMode === 'plan' && buf.text.trim()) {
+          console.log('[plan-debug] OPENING plan sidebar!')
           planDrafts.current.set(conversationId, buf.text)
           setPlanContent(buf.text)
           setPlanSidebarOpen(true)
@@ -756,11 +809,18 @@ function App(): JSX.Element {
           })
         }
 
-        const denials = c.permission_denials as unknown[] | undefined
+        const denials = c.permission_denials as DeniedTool[] | undefined
         if (denials && Array.isArray(denials) && denials.length > 0) {
-          setPermissionDenied(true)
-          setDeniedCount(denials.length)
-          setDeniedConversationId(conversationId)
+          // In "approve" mode, show the approval dialog with full tool details
+          const convMode = convPermissionModes.current.get(conversationId)
+          if (convMode === 'approve') {
+            setPendingApprovals(denials)
+            setApprovalConvId(conversationId)
+          } else {
+            setPermissionDenied(true)
+            setDeniedCount(denials.length)
+            setDeniedConversationId(conversationId)
+          }
         }
         // Save final text for notification before buffer is deleted
         finalTexts.current.set(conversationId, buf.text)
@@ -906,6 +966,57 @@ function App(): JSX.Element {
       }
     }
   }, [activeConversationId, updateLastAssistantMessage])
+
+  // --- Approval flow handlers ---
+  const handleApproveChanges = useCallback(async (approved: DeniedTool[]) => {
+    // Apply approved file changes
+    const appliedFiles: string[] = []
+    for (const tool of approved) {
+      const input = tool.tool_input
+      if (tool.tool_name === 'Write' && typeof input.file_path === 'string') {
+        await window.api.writeFileContent(input.file_path, String(input.content || ''))
+        appliedFiles.push(input.file_path)
+      } else if (tool.tool_name === 'Edit' && typeof input.file_path === 'string' && typeof input.old_string === 'string' && typeof input.new_string === 'string') {
+        const { content, exists } = await window.api.readFileContent(input.file_path)
+        if (exists) {
+          const updated = input.replace_all
+            ? content.split(input.old_string as string).join(input.new_string as string)
+            : content.replace(input.old_string as string, input.new_string as string)
+          await window.api.writeFileContent(input.file_path, updated)
+          appliedFiles.push(input.file_path)
+        }
+      }
+    }
+
+    setPendingApprovals([])
+
+    // Resume the conversation telling Claude what was applied
+    if (approvalConvId) {
+      const msg = appliedFiles.length > 0
+        ? `I approved and applied changes to: ${appliedFiles.join(', ')}. Continue.`
+        : 'I approved the requested tools. Continue.'
+      processMessage(msg, [], approvalConvId)
+    }
+    setApprovalConvId(null)
+  }, [approvalConvId, processMessage])
+
+  const handleApproveAllForSession = useCallback(() => {
+    // Switch to full access and resume
+    setPermissionMode('full')
+    setPendingApprovals([])
+    if (approvalConvId) {
+      processMessage('I switched to full access mode. Continue with all permissions granted.', [], approvalConvId)
+    }
+    setApprovalConvId(null)
+  }, [approvalConvId, processMessage, setPermissionMode])
+
+  const handleRejectAllChanges = useCallback(() => {
+    setPendingApprovals([])
+    if (approvalConvId) {
+      processMessage('I rejected all proposed changes. Please suggest a different approach.', [], approvalConvId)
+    }
+    setApprovalConvId(null)
+  }, [approvalConvId, processMessage])
 
   const handleNewChat = useCallback(() => {
     setActiveConversationId(null)
@@ -1108,6 +1219,10 @@ function App(): JSX.Element {
                     messages={activeConversation?.messages || []}
                     isLoading={isLoading}
                     permissionMode={permissionMode}
+                    pendingApprovals={pendingApprovals}
+                    onApproveTools={handleApproveChanges}
+                    onApproveAllForSession={handleApproveAllForSession}
+                    onRejectTools={handleRejectAllChanges}
                   />
                 </div>
                 {terminalOpen && (
@@ -1154,7 +1269,12 @@ function App(): JSX.Element {
                 setPermissionMode('full')
                 setPermissionDenied(false)
                 setDeniedCount(0)
+                // Resume the conversation with full access
+                const convId = deniedConversationId
                 setDeniedConversationId(null)
+                if (convId) {
+                  processMessage('I switched to full access mode. Continue with all permissions granted.', [], convId)
+                }
               }}
               onDismiss={() => {
                 setPermissionDenied(false)

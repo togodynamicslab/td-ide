@@ -3,12 +3,18 @@ import { Code2, Loader2, Map, CheckCircle2, AlertTriangle, X, RotateCcw } from '
 import { cn } from '@/lib/utils'
 import { Markdown, Reasoning } from './ai-elements'
 import InlineToolCall from './InlineToolCall'
-import type { Message, ContentBlock, PermissionMode } from '../App'
+import ApprovalWidget from './ApprovalWidget'
+import { useThinkingVerb } from '../hooks/useThinkingVerb'
+import type { Message, ContentBlock, PermissionMode, DeniedTool } from '../App'
 
 interface ChatAreaProps {
   messages: Message[]
   isLoading: boolean
   permissionMode: PermissionMode
+  pendingApprovals: DeniedTool[]
+  onApproveTools: (approved: DeniedTool[]) => void
+  onApproveAllForSession: () => void
+  onRejectTools: () => void
 }
 
 /** Build display blocks from message, with legacy fallback */
@@ -22,10 +28,11 @@ function getDisplayBlocks(msg: Message): ContentBlock[] {
   return blocks
 }
 
-function ChatArea({ messages, isLoading, permissionMode }: ChatAreaProps): JSX.Element {
+function ChatArea({ messages, isLoading, permissionMode, pendingApprovals, onApproveTools, onApproveAllForSession, onRejectTools }: ChatAreaProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastSnapshotRef = useRef('')
   const prevMsgCount = useRef(0)
+  const thinkingVerb = useThinkingVerb(isLoading)
 
   // Scroll to bottom on initial load (messages populated from DB)
   useEffect(() => {
@@ -147,6 +154,7 @@ function ChatArea({ messages, isLoading, permissionMode }: ChatAreaProps): JSX.E
                                 key={blockIdx}
                                 content={block.thinking}
                                 isStreaming={isAssistantLoading && isLastBlock}
+                                thinkingVerb={thinkingVerb}
                               />
                             )
                           case 'text':
@@ -171,14 +179,9 @@ function ChatArea({ messages, isLoading, permissionMode }: ChatAreaProps): JSX.E
                   {/* Loading indicator — only when no blocks at all yet */}
                   {isAssistantLoading && !hasAnyContent && (
                     <div className="flex items-center gap-2 text-sm text-td-muted py-2">
-                      <Loader2 className={cn(
-                        'h-4 w-4 animate-spin',
-                        permissionMode === 'plan' ? 'text-blue-400'
-                          : permissionMode === 'full' ? 'text-emerald-400'
-                          : 'text-td-accent'
-                      )} />
+                      <Loader2 className="h-4 w-4 animate-spin text-[#D97757]" />
                       <span className="animate-pulse">
-                        {permissionMode === 'plan' ? 'Claude is planning...' : 'Claude is thinking...'}
+                        {thinkingVerb}...
                       </span>
                     </div>
                   )}
@@ -186,13 +189,8 @@ function ChatArea({ messages, isLoading, permissionMode }: ChatAreaProps): JSX.E
                   {/* Working indicator — has tool blocks but no text yet */}
                   {isAssistantLoading && hasAnyContent && !isLastBlockThinking && lastBlock?.type === 'tool_use' && (
                     <div className="flex items-center gap-2 text-sm text-td-muted py-1 mt-1">
-                      <Loader2 className={cn(
-                        'h-3 w-3 animate-spin',
-                        permissionMode === 'plan' ? 'text-blue-400'
-                          : permissionMode === 'full' ? 'text-emerald-400'
-                          : 'text-td-accent'
-                      )} />
-                      <span>{permissionMode === 'plan' ? 'Analyzing...' : 'Working...'}</span>
+                      <Loader2 className="h-3 w-3 animate-spin text-[#D97757]" />
+                      <span>{thinkingVerb}...</span>
                     </div>
                   )}
 
@@ -213,6 +211,20 @@ function ChatArea({ messages, isLoading, permissionMode }: ChatAreaProps): JSX.E
               </div>
             )
           })}
+
+          {/* Inline approval widget */}
+          {pendingApprovals.length > 0 && (
+            <div className="flex justify-start">
+              <div className="text-td-text-secondary w-full max-w-[85%] rounded-lg px-4 py-3">
+                <ApprovalWidget
+                  denials={pendingApprovals}
+                  onApprove={onApproveTools}
+                  onApproveAll={onApproveAllForSession}
+                  onReject={onRejectTools}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

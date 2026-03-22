@@ -103,7 +103,7 @@ const EFFORT_LABELS: Record<EffortLevel, string> = {
 }
 
 const PERMISSION_LABELS: Record<PermissionMode, string> = {
-  full: 'Full access', default: 'Default', plan: 'Plan mode'
+  full: 'Full access', approve: 'Approve edits', default: 'Default', plan: 'Plan mode'
 }
 
 const MODEL_INFO = ([
@@ -610,10 +610,10 @@ function InputBar({
       badge: PERMISSION_LABELS[permissionMode],
       subOptions: [
         { value: 'full', label: 'Full access', current: permissionMode === 'full' },
-        { value: 'default', label: 'Default (ask)', current: permissionMode === 'default' },
+        { value: 'approve', label: 'Approve edits', current: permissionMode === 'approve' },
         { value: 'plan', label: 'Plan mode', current: permissionMode === 'plan' },
       ],
-      action: (arg) => { if (arg && ['full', 'default', 'plan'].includes(arg)) onPermissionModeChange(arg as PermissionMode) }
+      action: (arg) => { if (arg && ['full', 'approve', 'plan'].includes(arg)) onPermissionModeChange(arg as PermissionMode) }
     },
     {
       name: 'theme',
@@ -1041,7 +1041,9 @@ function InputBar({
                       ? 'border-blue-500/40 focus-within:border-blue-500/60'
                       : permissionMode === 'full'
                         ? 'border-emerald-500/30 focus-within:border-emerald-500/50'
-                        : 'border-td-border focus-within:border-td-muted/50'
+                        : permissionMode === 'approve'
+                          ? 'border-amber-500/30 focus-within:border-amber-500/50'
+                          : 'border-td-border focus-within:border-td-muted/50'
                 )}
                 onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
                 onDragLeave={() => setIsDragging(false)}
@@ -1192,11 +1194,14 @@ function InputBar({
                         'h-7 text-xs gap-1 font-medium px-2 transition-colors',
                         permissionMode === 'full'
                           ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10'
-                          : permissionMode === 'plan'
-                            ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
-                            : 'text-td-muted hover:text-td-text'
+                          : permissionMode === 'approve'
+                            ? 'text-amber-400 hover:text-amber-300 hover:bg-amber-500/10'
+                            : permissionMode === 'plan'
+                              ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
+                              : 'text-td-muted hover:text-td-text'
                       )}>
                         {permissionMode === 'full' ? <ShieldCheck className="h-3 w-3" />
+                          : permissionMode === 'approve' ? <ShieldCheck className="h-3 w-3" />
                           : permissionMode === 'plan' ? <MapIcon className="h-3 w-3" />
                           : <ShieldQuestion className="h-3 w-3" />}
                         <span className="hidden sm:inline">
@@ -1205,30 +1210,12 @@ function InputBar({
                         </span>
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent side="top" align="start" className="w-56">
-                      <DropdownMenuLabel>Permission mode</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
+                    <DropdownMenuContent side="top" align="start">
                       <DropdownMenuRadioGroup value={permissionMode} onValueChange={(v) => onPermissionModeChange(v as PermissionMode)}>
                         <DropdownMenuRadioItem value="full">Full access</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="default">Default (ask)</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="approve">Approve edits</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="plan">Plan mode</DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
-                      {permissionMode !== 'plan' && (
-                        <>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuLabel>Allowed tools</DropdownMenuLabel>
-                          {MANAGEABLE_TOOLS.map((tool) => (
-                            <DropdownMenuCheckboxItem
-                              key={tool.id}
-                              checked={!disabledTools.has(tool.id)}
-                              onCheckedChange={() => onToggleTool(tool.id)}
-                              onSelect={(e) => e.preventDefault()}
-                            >
-                              {tool.label}
-                            </DropdownMenuCheckboxItem>
-                          ))}
-                        </>
-                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
 

@@ -6,12 +6,14 @@ import { cn } from '@/lib/utils'
 interface ReasoningProps {
   content: string
   isStreaming?: boolean
+  thinkingVerb?: string
   className?: string
 }
 
 export default function Reasoning({
   content,
   isStreaming = false,
+  thinkingVerb,
   className
 }: ReasoningProps): JSX.Element {
   const [open, setOpen] = useState(isStreaming)
@@ -44,7 +46,7 @@ export default function Reasoning({
           isStreaming ? 'text-purple-400 animate-pulse' : 'text-purple-400/60'
         )} />
         <span className="text-td-text-tertiary font-medium">
-          {isStreaming ? 'Thinking...' : 'Thought'}
+          {isStreaming ? `${thinkingVerb || 'Thinking'}...` : 'Thought'}
         </span>
         {!isStreaming && (
           <span className="text-td-muted">
