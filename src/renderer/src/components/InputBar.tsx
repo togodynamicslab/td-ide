@@ -1,0 +1,854 @@
+import { useState, useRef, useEffect, useCallback, useMemo, FormEvent } from 'react'
+import {
+  Sparkles, Gauge, Square, Loader2, Plus, Paperclip,
+  Camera, CornerDownLeft, X, ListOrdered, Image as ImageIcon,
+  Map as MapIcon, ShieldCheck, ShieldQuestion,
+  MessageSquarePlus, Eraser, HelpCircle, Hash, Sun,
+  Moon, Settings, FileCode, Minimize2, FolderOpen,
+  Terminal, Zap, Info, Check, Timer, RefreshCw,
+  Code2, Bug, Keyboard, BookOpen
+} from 'lucide-react'
+import { Button } from './ui/button'
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup,
+  DropdownMenuRadioItem, DropdownMenuLabel, DropdownMenuSeparator,
+  DropdownMenuTrigger, DropdownMenuItem, DropdownMenuCheckboxItem
+} from './ui/dropdown-menu'
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from './ui/tooltip'
+import { cn } from '@/lib/utils'
+import type { ModelId, EffortLevel, PermissionMode, ImageAttachment } from '../App'
+
+interface InputBarProps {
+  conversationId: string | null
+  onSend: (message: string, images?: ImageAttachment[]) => void
+  onCancel: () => void
+  onNewChat: () => void
+  onClearConversation: () => void
+  onOpenSettings: () => void
+  onOpenInExplorer: () => void
+  onOpenInTerminal: () => void
+  onAddFile: () => void
+  isLoading: boolean
+  queueLength: number
+  selectedModel: ModelId
+  onModelChange: (model: ModelId) => void
+  effortLevel: EffortLevel
+  onEffortChange: (effort: EffortLevel) => void
+  permissionMode: PermissionMode
+  onPermissionModeChange: (mode: PermissionMode) => void
+  disabledTools: Set<string>
+  onToggleTool: (tool: string) => void
+}
+
+// --- Slash command definitions ---
+
+type SlashCategory = 'chat' | 'config' | 'project' | 'automation' | 'info'
+
+const CATEGORY_LABELS: Record<SlashCategory, string> = {
+  chat: 'Chat',
+  config: 'Configuration',
+  project: 'Project',
+  automation: 'Automation',
+  info: 'Info'
+}
+
+interface SlashCommand {
+  name: string
+  description: string
+  icon: React.ReactNode
+  category: SlashCategory
+  badge?: string // current value indicator
+  subOptions?: { value: string; label: string; current?: boolean }[]
+  action: (arg?: string) => void
+}
+
+const MANAGEABLE_TOOLS = [
+  { id: 'Agent', label: 'Agent (sub-agents)' },
+  { id: 'WebSearch', label: 'Web Search' },
+  { id: 'WebFetch', label: 'Web Fetch' },
+  { id: 'Bash', label: 'Bash / Shell' },
+  { id: 'Edit', label: 'Edit files' },
+  { id: 'Write', label: 'Write files' },
+  { id: 'NotebookEdit', label: 'Notebook Edit' },
+]
+
+interface Draft {
+  text: string
+  images: ImageAttachment[]
+}
+
+const MODEL_LABELS: Record<ModelId, string> = {
+  opus: 'Claude Opus 4.6',
+  sonnet: 'Claude Sonnet 4.6',
+  haiku: 'Claude Haiku 4.5'
+}
+
+const EFFORT_LABELS: Record<EffortLevel, string> = {
+  low: 'Low', medium: 'Medium', high: 'High', max: 'Max'
+}
+
+const PERMISSION_LABELS: Record<PermissionMode, string> = {
+  full: 'Full access', default: 'Default', plan: 'Plan mode'
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+function InputBar({
+  conversationId, onSend, onCancel, onNewChat, onClearConversation,
+  onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile,
+  isLoading, queueLength, selectedModel, onModelChange,
+  effortLevel, onEffortChange, permissionMode, onPermissionModeChange,
+  disabledTools, onToggleTool
+}: InputBarProps): JSX.Element {
+  const [text, setText] = useState('')
+  const [images, setImages] = useState<ImageAttachment[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [slashIdx, setSlashIdx] = useState(0)
+  const [statusMsg, setStatusMsg] = useState<string | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const slashMenuRef = useRef<HTMLDivElement>(null)
+  const drafts = useRef<Map<string, Draft>>(new Map())
+  const prevConvId = useRef<string | null>(null)
+
+  const status = isLoading ? 'streaming' : 'ready'
+
+  // Build slash commands with categories
+  const slashCommands: SlashCommand[] = useMemo(() => [
+    // ── Chat ──
+    {
+      name: 'new',
+      description: 'Start a new chat',
+      icon: <MessageSquarePlus className="h-3.5 w-3.5 text-td-accent" />,
+      category: 'chat' as SlashCategory,
+      action: () => onNewChat()
+    },
+    {
+      name: 'clear',
+      description: 'Clear current conversation',
+      icon: <Eraser className="h-3.5 w-3.5 text-red-400" />,
+      category: 'chat' as SlashCategory,
+      action: () => onClearConversation()
+    },
+    {
+      name: 'compact',
+      description: 'Summarize conversation to save context',
+      icon: <Minimize2 className="h-3.5 w-3.5 text-purple-400" />,
+      category: 'chat' as SlashCategory,
+      action: () => onSend('/compact — Please provide a concise summary of our conversation so far, then we can continue from that summary.')
+    },
+
+    // ── Config ──
+    {
+      name: 'model',
+      description: 'Switch Claude model',
+      icon: <Sparkles className="h-3.5 w-3.5 text-orange-400" />,
+      category: 'config' as SlashCategory,
+      badge: MODEL_LABELS[selectedModel],
+      subOptions: [
+        { value: 'opus', label: 'Claude Opus 4.6', current: selectedModel === 'opus' },
+        { value: 'sonnet', label: 'Claude Sonnet 4.6', current: selectedModel === 'sonnet' },
+        { value: 'haiku', label: 'Claude Haiku 4.5', current: selectedModel === 'haiku' },
+      ],
+      action: (arg) => { if (arg && ['opus', 'sonnet', 'haiku'].includes(arg)) onModelChange(arg as ModelId) }
+    },
+    {
+      name: 'effort',
+      description: 'Set thinking effort level',
+      icon: <Gauge className="h-3.5 w-3.5 text-blue-400" />,
+      category: 'config' as SlashCategory,
+      badge: EFFORT_LABELS[effortLevel],
+      subOptions: [
+        { value: 'max', label: 'Max', current: effortLevel === 'max' },
+        { value: 'high', label: 'High', current: effortLevel === 'high' },
+        { value: 'medium', label: 'Medium', current: effortLevel === 'medium' },
+        { value: 'low', label: 'Low', current: effortLevel === 'low' },
+      ],
+      action: (arg) => { if (arg && ['low', 'medium', 'high', 'max'].includes(arg)) onEffortChange(arg as EffortLevel) }
+    },
+    {
+      name: 'permission',
+      description: 'Change permission mode',
+      icon: <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />,
+      category: 'config' as SlashCategory,
+      badge: PERMISSION_LABELS[permissionMode],
+      subOptions: [
+        { value: 'full', label: 'Full access', current: permissionMode === 'full' },
+        { value: 'default', label: 'Default (ask)', current: permissionMode === 'default' },
+        { value: 'plan', label: 'Plan mode', current: permissionMode === 'plan' },
+      ],
+      action: (arg) => { if (arg && ['full', 'default', 'plan'].includes(arg)) onPermissionModeChange(arg as PermissionMode) }
+    },
+    {
+      name: 'theme',
+      description: 'Toggle dark / light mode',
+      icon: document.documentElement.classList.contains('dark')
+        ? <Sun className="h-3.5 w-3.5 text-yellow-400" />
+        : <Moon className="h-3.5 w-3.5 text-indigo-400" />,
+      category: 'config' as SlashCategory,
+      badge: document.documentElement.classList.contains('dark') ? 'Dark' : 'Light',
+      action: () => {
+        // Toggle theme via the same mechanism as sidebar
+        document.documentElement.classList.toggle('dark')
+        localStorage.setItem('td-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light')
+      }
+    },
+    {
+      name: 'settings',
+      description: 'Open settings panel',
+      icon: <Settings className="h-3.5 w-3.5 text-td-muted" />,
+      category: 'config' as SlashCategory,
+      action: () => onOpenSettings()
+    },
+
+    // ── Project ──
+    {
+      name: 'add-file',
+      description: 'Add a file to the conversation',
+      icon: <FileCode className="h-3.5 w-3.5 text-cyan-400" />,
+      category: 'project' as SlashCategory,
+      action: () => onAddFile()
+    },
+    {
+      name: 'explorer',
+      description: 'Open project in file explorer',
+      icon: <FolderOpen className="h-3.5 w-3.5 text-td-muted" />,
+      category: 'project' as SlashCategory,
+      action: () => onOpenInExplorer()
+    },
+    {
+      name: 'terminal',
+      description: 'Open project in terminal',
+      icon: <Terminal className="h-3.5 w-3.5 text-td-muted" />,
+      category: 'project' as SlashCategory,
+      action: () => onOpenInTerminal()
+    },
+    {
+      name: 'init',
+      description: 'Create CLAUDE.md for this project',
+      icon: <FileCode className="h-3.5 w-3.5 text-orange-400" />,
+      category: 'project' as SlashCategory,
+      action: () => onSend('Please create a CLAUDE.md file in the project root with best practices, project conventions, and a brief description of the codebase.')
+    },
+
+    // ── Automation ──
+    {
+      name: 'loop',
+      description: 'Run a prompt on a recurring interval',
+      icon: <Timer className="h-3.5 w-3.5 text-amber-400" />,
+      category: 'automation' as SlashCategory,
+      action: (arg) => {
+        // Format: /loop [interval] [prompt] — e.g. "/loop 5m check build status"
+        // If no arg, send a helpful prompt
+        if (arg) {
+          onSend(`/loop ${arg}`)
+        } else {
+          setStatusMsg('Usage: /loop 5m <prompt> — runs a prompt every N minutes')
+          setTimeout(() => setStatusMsg(null), 4000)
+        }
+      }
+    },
+    {
+      name: 'review',
+      description: 'Review recent code changes',
+      icon: <Code2 className="h-3.5 w-3.5 text-cyan-400" />,
+      category: 'automation' as SlashCategory,
+      action: () => onSend('Please review my recent code changes. Run git diff to see what changed, then provide feedback on code quality, potential bugs, and improvements.')
+    },
+    {
+      name: 'simplify',
+      description: 'Review changed code for issues and improvements',
+      icon: <RefreshCw className="h-3.5 w-3.5 text-teal-400" />,
+      category: 'automation' as SlashCategory,
+      action: () => onSend('Please review the recently changed code for reuse opportunities, quality issues, and efficiency improvements, then fix any issues you find.')
+    },
+    {
+      name: 'bug',
+      description: 'Report or investigate a bug',
+      icon: <Bug className="h-3.5 w-3.5 text-red-400" />,
+      category: 'automation' as SlashCategory,
+      action: (arg) => onSend(arg
+        ? `Please help me investigate and fix this bug: ${arg}`
+        : 'Please help me investigate and fix the following bug:')
+    },
+
+    // ── Info ──
+    {
+      name: 'status',
+      description: 'Show current configuration',
+      icon: <Info className="h-3.5 w-3.5 text-td-muted" />,
+      category: 'info' as SlashCategory,
+      action: () => {
+        setStatusMsg(`Model: ${MODEL_LABELS[selectedModel]}  |  Effort: ${EFFORT_LABELS[effortLevel]}  |  Mode: ${PERMISSION_LABELS[permissionMode]}${disabledTools.size > 0 ? `  |  Disabled tools: ${disabledTools.size}` : ''}`)
+        setTimeout(() => setStatusMsg(null), 4000)
+      }
+    },
+    {
+      name: 'keybindings',
+      description: 'Show keyboard shortcuts',
+      icon: <Keyboard className="h-3.5 w-3.5 text-td-muted" />,
+      category: 'info' as SlashCategory,
+      action: () => {
+        setStatusMsg('Ctrl+B: Toggle sidebar  |  Ctrl+Enter: Send  |  /: Commands  |  Esc: Close menu')
+        setTimeout(() => setStatusMsg(null), 5000)
+      }
+    },
+    {
+      name: 'claude-api',
+      description: 'Get help building with the Claude API',
+      icon: <BookOpen className="h-3.5 w-3.5 text-purple-400" />,
+      category: 'info' as SlashCategory,
+      action: () => onSend('I want to build something with the Claude API or Anthropic SDK. Please help me get started.')
+    },
+    {
+      name: 'help',
+      description: 'Show available commands',
+      icon: <HelpCircle className="h-3.5 w-3.5 text-td-muted" />,
+      category: 'info' as SlashCategory,
+      action: () => {} // just shows the menu
+    },
+  ], [onModelChange, onEffortChange, onPermissionModeChange, onNewChat, onClearConversation, onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile, onSend, selectedModel, effortLevel, permissionMode, disabledTools])
+
+  // Parse slash input
+  const slashParse = useMemo(() => {
+    const trimmed = text.trimStart()
+    if (!trimmed.startsWith('/')) return null
+    const hasSpace = trimmed.includes(' ')
+    const parts = trimmed.slice(1).split(/\s+/)
+    const cmdName = parts[0]?.toLowerCase() || ''
+    const arg = parts[1]?.toLowerCase() || ''
+    // Full rest of text after "/command "
+    const restIdx = trimmed.indexOf(' ')
+    const rest = restIdx >= 0 ? trimmed.slice(restIdx + 1).trim() : ''
+    return { cmdName, arg, hasSpace, rest }
+  }, [text])
+
+  // Detect shell command mode (! prefix)
+  const shellMode = useMemo(() => {
+    const trimmed = text.trimStart()
+    if (!trimmed.startsWith('!') || trimmed.length <= 1) return null
+    return { command: trimmed.slice(1) }
+  }, [text])
+
+  // Build menu items with category grouping
+  const menuItems = useMemo(() => {
+    if (!slashParse) return []
+    const { cmdName, arg, hasSpace } = slashParse
+    const exactCmd = slashCommands.find((c) => c.name === cmdName)
+
+    // Sub-options mode (e.g. "/model ")
+    if (exactCmd?.subOptions && hasSpace) {
+      const filtered = arg
+        ? exactCmd.subOptions.filter((o) => o.value.startsWith(arg))
+        : exactCmd.subOptions
+      return filtered.map((o) => ({
+        key: o.value, label: o.label, isSub: true, cmd: exactCmd,
+        current: o.current, categoryHeader: undefined as string | undefined
+      }))
+    }
+
+    // Filter commands by prefix, add category headers
+    const filtered = slashCommands.filter((c) => c.name.startsWith(cmdName))
+    const items: { key: string; label: string; description?: string; icon?: React.ReactNode; badge?: string; isSub: boolean; cmd: SlashCommand; current?: boolean; categoryHeader?: string }[] = []
+    let lastCat = ''
+    for (const c of filtered) {
+      const header = c.category !== lastCat ? CATEGORY_LABELS[c.category] : undefined
+      lastCat = c.category
+      items.push({
+        key: c.name, label: `/${c.name}`, description: c.description,
+        icon: c.icon, badge: c.badge, isSub: false, cmd: c, categoryHeader: header
+      })
+    }
+    return items
+  }, [slashParse, slashCommands])
+
+  const showSlashMenu = menuItems.length > 0
+
+  // Reset index when items change
+  useEffect(() => { setSlashIdx(0) }, [menuItems.length, showSlashMenu])
+
+  // Scroll active item into view
+  useEffect(() => {
+    if (slashMenuRef.current && slashIdx >= 0) {
+      const items = slashMenuRef.current.querySelectorAll('[data-slash-item]')
+      const el = items[slashIdx] as HTMLElement
+      el?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [slashIdx])
+
+  // Execute slash
+  const executeSlash = (item: (typeof menuItems)[number]) => {
+    if (item.isSub) {
+      item.cmd.action(item.key)
+    } else if (item.cmd.subOptions) {
+      setText(`/${item.cmd.name} `)
+      textareaRef.current?.focus()
+      return
+    } else {
+      // Pass full rest of text for commands that accept inline args (e.g. /loop 5m ...)
+      item.cmd.action(slashParse?.rest || undefined)
+    }
+    setText('')
+    textareaRef.current?.focus()
+  }
+
+  // Save/restore drafts when conversation changes
+  useEffect(() => {
+    const key = conversationId || '__new__'
+    const prevKey = prevConvId.current || '__new__'
+
+    if (prevKey !== key) {
+      // Save current draft for the previous conversation
+      drafts.current.set(prevKey, { text, images })
+
+      // Restore draft for the new conversation
+      const saved = drafts.current.get(key)
+      setText(saved?.text || '')
+      setImages(saved?.images || [])
+    }
+
+    prevConvId.current = conversationId
+  }, [conversationId])
+
+  useEffect(() => { textareaRef.current?.focus() }, [conversationId])
+
+  const addFiles = useCallback(async (files: FileList | File[]) => {
+    const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'))
+    const newImages: ImageAttachment[] = []
+    for (const file of imageFiles) {
+      const dataUrl = await fileToDataUrl(file)
+      newImages.push({ id: Date.now().toString() + Math.random(), name: file.name, dataUrl })
+    }
+    setImages((prev) => [...prev, ...newImages])
+  }, [])
+
+  const removeImage = useCallback((id: string) => {
+    setImages((prev) => prev.filter((img) => img.id !== id))
+  }, [])
+
+  const handleSubmit = (e?: FormEvent) => {
+    e?.preventDefault()
+
+    // If slash menu is open, execute selected item
+    if (showSlashMenu && menuItems.length > 0) {
+      const item = menuItems[Math.min(slashIdx, menuItems.length - 1)]
+      if (item) { executeSlash(item); return }
+    }
+
+    if (isLoading && queueLength === 0) {
+      onCancel()
+      return
+    }
+    if (!text.trim() && images.length === 0) return
+    onSend(text, images)
+    setText('')
+    setImages([])
+    drafts.current.delete(conversationId || '__new__')
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Slash menu navigation
+    if (showSlashMenu) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => Math.min(i + 1, menuItems.length - 1)); return }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((i) => Math.max(i - 1, 0)); return }
+      if (e.key === 'Tab') { e.preventDefault(); const item = menuItems[slashIdx]; if (item) executeSlash(item); return }
+      if (e.key === 'Escape') { e.preventDefault(); setText(''); return }
+    }
+
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSubmit()
+    }
+    if (e.key === 'Backspace' && !text && images.length > 0) {
+      setImages((prev) => prev.slice(0, -1))
+    }
+  }
+
+  const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items
+    const imageItems = Array.from(items).filter((item) => item.type.startsWith('image/'))
+    if (imageItems.length === 0) return
+    e.preventDefault()
+    const files = imageItems.map((item) => item.getAsFile()).filter(Boolean) as File[]
+    await addFiles(files)
+  }, [addFiles])
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    await addFiles(e.dataTransfer.files)
+  }, [addFiles])
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 192) + 'px'
+    }
+  }, [text])
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <div className="border-t border-td-border bg-td-bg px-6 py-3">
+        <div className="max-w-3xl mx-auto">
+          <form onSubmit={handleSubmit} className="w-full">
+            <div className="relative">
+              {/* Slash command popup — outside overflow-hidden container */}
+              {showSlashMenu && (
+                <div
+                  ref={slashMenuRef}
+                  className="absolute bottom-full left-0 right-0 mb-1 max-h-80 overflow-y-auto rounded-lg border border-td-border bg-td-surface shadow-xl z-50"
+                >
+                  {/* Sub-option header */}
+                  {menuItems[0]?.isSub && (
+                    <div className="px-3 py-1.5 text-[11px] text-td-muted font-medium uppercase tracking-wider border-b border-td-border flex items-center gap-2">
+                      <span>/{menuItems[0].cmd.name}</span>
+                      {menuItems[0].cmd.badge && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-td-accent/15 text-td-accent font-normal normal-case tracking-normal">
+                          {menuItems[0].cmd.badge}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {menuItems.map((item, i) => (
+                    <div key={item.key}>
+                      {/* Category header */}
+                      {item.categoryHeader && (
+                        <div className="px-3 pt-2 pb-1 text-[10px] text-td-muted font-medium uppercase tracking-wider first:pt-1.5">
+                          {item.categoryHeader}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        data-slash-item
+                        className={cn(
+                          'w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-left transition-colors',
+                          i === slashIdx ? 'bg-td-hover text-td-text' : 'text-td-text-secondary hover:bg-td-hover'
+                        )}
+                        onMouseEnter={() => setSlashIdx(i)}
+                        onClick={() => executeSlash(item)}
+                      >
+                        {item.isSub ? (
+                          <>
+                            <Hash className="h-3.5 w-3.5 text-td-muted shrink-0" />
+                            <span className="flex-1">{item.label}</span>
+                            {item.current && <Check className="h-3 w-3 text-emerald-400 shrink-0" />}
+                          </>
+                        ) : (
+                          <>
+                            {item.icon}
+                            <div className="flex-1 min-w-0 flex items-center gap-2">
+                              <span className="font-medium">{item.label}</span>
+                              {item.description && (
+                                <span className="text-td-muted text-xs truncate">{item.description}</span>
+                              )}
+                            </div>
+                            {item.badge && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-td-bg text-td-muted shrink-0">
+                                {item.badge}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ))}
+                  {/* Keyboard hints */}
+                  <div className="px-3 py-1.5 border-t border-td-border flex items-center gap-3 text-[10px] text-td-muted">
+                    <span><kbd className="px-1 py-0.5 rounded bg-td-bg text-td-text-tertiary">↑↓</kbd> navigate</span>
+                    <span><kbd className="px-1 py-0.5 rounded bg-td-bg text-td-text-tertiary">Tab</kbd> select</span>
+                    <span><kbd className="px-1 py-0.5 rounded bg-td-bg text-td-text-tertiary">Enter</kbd> execute</span>
+                    <span><kbd className="px-1 py-0.5 rounded bg-td-bg text-td-text-tertiary">Esc</kbd> close</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Shell command indicator — ! prefix */}
+              {shellMode && !showSlashMenu && (
+                <div className="absolute bottom-full left-0 right-0 mb-1 rounded-lg border border-td-border bg-td-surface shadow-xl z-50 px-3 py-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Terminal className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
+                    <span className="text-td-text font-medium">Shell command</span>
+                    <span className="text-td-muted text-xs truncate">{shellMode.command}</span>
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-3 text-[10px] text-td-muted">
+                    <span><kbd className="px-1 py-0.5 rounded bg-td-bg text-td-text-tertiary">Enter</kbd> execute</span>
+                    <span>Runs in project directory</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Status toast */}
+              {statusMsg && (
+                <div className="absolute bottom-full left-0 right-0 mb-1 px-3 py-2 rounded-lg border border-td-border bg-td-surface shadow-xl z-50 text-xs text-td-text-secondary flex items-center gap-2">
+                  <Info className="h-3.5 w-3.5 text-td-accent shrink-0" />
+                  {statusMsg}
+                </div>
+              )}
+
+              <div
+                className={cn(
+                  'rounded-xl border bg-td-surface overflow-hidden transition-colors',
+                  isDragging
+                    ? 'border-td-accent bg-td-accent/5'
+                    : permissionMode === 'plan'
+                      ? 'border-blue-500/40 focus-within:border-blue-500/60'
+                      : permissionMode === 'full'
+                        ? 'border-emerald-500/30 focus-within:border-emerald-500/50'
+                        : 'border-td-border focus-within:border-td-muted/50'
+                )}
+                onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+              >
+              {/* Image previews (header) */}
+              {images.length > 0 && (
+                <div className="flex flex-wrap gap-2 px-3 pt-3 pb-1">
+                  {images.map((img) => (
+                    <div key={img.id} className="relative group">
+                      <img
+                        src={img.dataUrl}
+                        alt={img.name}
+                        className="h-16 w-16 rounded-lg object-cover border border-td-border"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeImage(img.id)}
+                        className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white px-1 py-0.5 rounded-b-lg truncate">
+                        {img.name}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Drop zone overlay */}
+              {isDragging && (
+                <div className="px-4 py-6 text-center text-sm text-td-accent">
+                  <ImageIcon className="h-6 w-6 mx-auto mb-1" />
+                  Drop images here
+                </div>
+              )}
+
+              {/* Textarea */}
+              <textarea
+                ref={textareaRef}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                placeholder={permissionMode === 'plan' ? 'Describe what you want to plan...' : 'Type / for commands, or ask anything...'}
+                className={cn(
+                  'w-full bg-transparent px-4 pt-3 pb-2 text-sm text-td-text placeholder-td-muted resize-none outline-none min-h-[64px] max-h-[192px]',
+                  isDragging && 'hidden'
+                )}
+                rows={1}
+              />
+
+              {/* Footer */}
+              <div className="flex items-center justify-between px-2 py-1.5">
+                <div className="flex items-center gap-0.5 min-w-0">
+                  {/* Action menu with file upload */}
+                  <DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-td-muted">
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Add</TooltipContent>
+                    </Tooltip>
+                    <DropdownMenuContent side="top" align="start">
+                      <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+                        <Paperclip className="h-3.5 w-3.5 mr-2" />
+                        Add photos or files
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={async () => {
+                        try {
+                          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
+                          const track = stream.getVideoTracks()[0]
+                          const imageCapture = new (window as any).ImageCapture(track)
+                          const blob = await imageCapture.grabFrame()
+                          track.stop()
+                          const canvas = document.createElement('canvas')
+                          canvas.width = blob.width
+                          canvas.height = blob.height
+                          const ctx = canvas.getContext('2d')!
+                          ctx.drawImage(blob, 0, 0)
+                          const dataUrl = canvas.toDataURL('image/png')
+                          setImages((prev) => [...prev, {
+                            id: Date.now().toString(),
+                            name: `screenshot-${Date.now()}.png`,
+                            dataUrl
+                          }])
+                        } catch { /* user cancelled */ }
+                      }}>
+                        <Camera className="h-3.5 w-3.5 mr-2" />
+                        Take screenshot
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  {/* Hidden file input */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }}
+                  />
+
+                  {/* Model selector */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5 text-td-muted hover:text-td-text font-medium px-2">
+                        <Sparkles className="h-3 w-3 text-orange-400" />
+                        <span className="hidden sm:inline">{MODEL_LABELS[selectedModel]}</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="top" align="start">
+                      <DropdownMenuLabel>Model</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuRadioGroup value={selectedModel} onValueChange={(v) => onModelChange(v as ModelId)}>
+                        <DropdownMenuRadioItem value="opus">Claude Opus 4.6</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="sonnet">Claude Sonnet 4.6</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="haiku">Claude Haiku 4.5</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  {/* Effort */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-td-muted hover:text-td-text font-medium px-2">
+                        <Gauge className="h-3 w-3" />
+                        {EFFORT_LABELS[effortLevel]}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="top" align="start">
+                      <DropdownMenuLabel>Thinking effort</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuRadioGroup value={effortLevel} onValueChange={(v) => onEffortChange(v as EffortLevel)}>
+                        <DropdownMenuRadioItem value="max">Max</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="high">High</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="medium">Medium</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="low">Low</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  {/* Permission mode & tools */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" className={cn(
+                        'h-7 text-xs gap-1 font-medium px-2 transition-colors',
+                        permissionMode === 'full'
+                          ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10'
+                          : permissionMode === 'plan'
+                            ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
+                            : 'text-td-muted hover:text-td-text'
+                      )}>
+                        {permissionMode === 'full' ? <ShieldCheck className="h-3 w-3" />
+                          : permissionMode === 'plan' ? <MapIcon className="h-3 w-3" />
+                          : <ShieldQuestion className="h-3 w-3" />}
+                        <span className="hidden sm:inline">
+                          {PERMISSION_LABELS[permissionMode]}
+                          {disabledTools.size > 0 && ` (-${disabledTools.size})`}
+                        </span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="top" align="start" className="w-56">
+                      <DropdownMenuLabel>Permission mode</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuRadioGroup value={permissionMode} onValueChange={(v) => onPermissionModeChange(v as PermissionMode)}>
+                        <DropdownMenuRadioItem value="full">Full access</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="default">Default (ask)</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="plan">Plan mode</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                      {permissionMode !== 'plan' && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuLabel>Allowed tools</DropdownMenuLabel>
+                          {MANAGEABLE_TOOLS.map((tool) => (
+                            <DropdownMenuCheckboxItem
+                              key={tool.id}
+                              checked={!disabledTools.has(tool.id)}
+                              onCheckedChange={() => onToggleTool(tool.id)}
+                              onSelect={(e) => e.preventDefault()}
+                            >
+                              {tool.label}
+                            </DropdownMenuCheckboxItem>
+                          ))}
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  {/* Queue indicator */}
+                  {queueLength > 0 && (
+                    <div className="flex items-center gap-1 text-xs text-orange-400 px-2">
+                      <ListOrdered className="h-3 w-3" />
+                      <span>{queueLength} queued</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Submit / Stop */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {status === 'streaming' && queueLength === 0 ? (
+                      <Button
+                        type="button"
+                        onClick={onCancel}
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 shrink-0 gap-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/10 px-2 rounded-lg"
+                      >
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <Square className="h-2.5 w-2.5 fill-current" />
+                      </Button>
+                    ) : (
+                      <Button
+                        type="submit"
+                        size="icon"
+                        variant={(text.trim() || images.length > 0) ? 'default' : 'ghost'}
+                        className={cn(
+                          'h-7 w-7 rounded-lg shrink-0 transition-all',
+                          !(text.trim() || images.length > 0) && 'text-td-muted'
+                        )}
+                        disabled={status === 'ready' && !text.trim() && images.length === 0}
+                      >
+                        <CornerDownLeft className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {status === 'streaming' && queueLength === 0 ? 'Stop generation' : isLoading ? 'Queue message' : 'Send message'}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </TooltipProvider>
+  )
+}
+
+export default InputBar

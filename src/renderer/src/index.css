@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Light theme (default) ── */
+:root {
+  --td-bg: 255 255 255;
+  --td-surface: 243 244 246;
+  --td-border: 229 231 235;
+  --td-hover: 240 241 245;
+  --td-accent: 59 130 246;
+  --td-muted: 107 114 128;
+  --td-bubble: 232 234 240;
+
+  --td-text: 17 24 39;
+  --td-text-secondary: 55 65 81;
+  --td-text-tertiary: 75 85 99;
+  --td-text-faint: 156 163 175;
+
+  --td-scrollbar: 209 213 219;
+  --td-scrollbar-hover: 176 181 189;
+
+  --td-code-bg: 248 249 250;
+  --td-line-number: 192 196 204;
+  --td-code-inline: 194 65 12;
+}
+
+/* ── Dark theme ── */
+.dark {
+  --td-bg: 15 15 23;
+  --td-surface: 26 26 40;
+  --td-border: 42 42 61;
+  --td-hover: 37 37 56;
+  --td-accent: 59 130 246;
+  --td-muted: 107 114 128;
+  --td-bubble: 30 30 48;
+
+  --td-text: 229 231 235;
+  --td-text-secondary: 209 213 219;
+  --td-text-tertiary: 156 163 175;
+  --td-text-faint: 107 114 128;
+
+  --td-scrollbar: 42 42 61;
+  --td-scrollbar-hover: 58 58 77;
+
+  --td-code-bg: 15 15 23;
+  --td-line-number: 58 58 77;
+  --td-code-inline: 253 186 116;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: rgb(var(--td-bg));
+  color: rgb(var(--td-text));
+  overflow: hidden;
+  height: 100vh;
+}
+
+#root {
+  height: 100vh;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--td-scrollbar));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--td-scrollbar-hover));
+}
+
+/* Custom title bar drag region */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Markdown image rendering */
+.break-words img {
+  max-width: 100%;
+  border-radius: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+/* Syntax highlighter overrides for theme consistency */
+code[class*="language-"],
+pre[class*="language-"] {
+  text-shadow: none !important;
+}
