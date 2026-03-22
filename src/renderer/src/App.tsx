@@ -9,6 +9,7 @@ import PlanSidebar from './components/PlanSidebar'
 import SettingsPage from './components/SettingsPage'
 import TerminalPanel from './components/TerminalPanel'
 import ResizeHandle from './components/ResizeHandle'
+import UsageDialog from './components/UsageDialog'
 
 export interface ToolBlock {
   id: string
@@ -61,6 +62,15 @@ export type ModelId = 'opus' | 'sonnet' | 'haiku'
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max'
 export type PermissionMode = 'full' | 'default' | 'plan'
 
+export interface ModelUsageEntry {
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
+  costUSD: number
+}
+
 export interface ConversationUsage {
   totalCostUsd: number
   inputTokens: number
@@ -68,6 +78,8 @@ export interface ConversationUsage {
   cacheReadTokens: number
   cacheCreationTokens: number
   turns: number
+  durationMs: number
+  modelUsage: Record<string, ModelUsageEntry>
 }
 
 interface StreamBuffer {
@@ -943,9 +955,11 @@ function App(): JSX.Element {
     handleSend(`Execute this plan:\n\n${plan}`)
   }, [handleSend])
 
-  const currentPlanContent = activeConversationId
-    ? planDrafts.current.get(activeConversationId) || ''
-    : ''
+  // Sync plan content when switching conversations
+  useEffect(() => {
+    const content = activeConversationId ? planDrafts.current.get(activeConversationId) || '' : ''
+    setPlanContent(content)
+  }, [activeConversationId])
 
   const handleAddFile = useCallback(async () => {
     if (!activeProject) return
@@ -994,7 +1008,12 @@ function App(): JSX.Element {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       {settingsOpen ? (
-        <SettingsPage project={activeProject} onClose={() => setSettingsOpen(false)} />
+        <SettingsPage project={activeProject} onClose={() => setSettingsOpen(false)} onTestPlanSidebar={() => {
+          const testPlan = '## Test Plan\n\n1. **Step 1:** Read the codebase structure\n2. **Step 2:** Identify the relevant files\n3. **Step 3:** Implement the changes\n4. **Step 4:** Run tests and verify\n\n> This is a simulated plan to test the sidebar rendering.'
+          setPlanContent(testPlan)
+          setPlanSidebarOpen(true)
+          setSettingsOpen(false)
+        }} />
       ) : (
       <div className="flex flex-1 flex-col min-w-0">
         <TopBar
@@ -1045,8 +1064,9 @@ function App(): JSX.Element {
               </div>
               {planSidebarOpen && (
                 <PlanSidebar
-                  planContent={currentPlanContent}
+                  planContent={planContent}
                   onPlanChange={(content) => {
+                    setPlanContent(content)
                     if (activeConversationId) planDrafts.current.set(activeConversationId, content)
                   }}
                   onExecutePlan={handleExecutePlan}
@@ -1113,6 +1133,13 @@ function App(): JSX.Element {
               })}
               useWorktree={useWorktree}
               onUseWorktreeChange={setUseWorktree}
+              onShowUsage={() => setUsageOpen(true)}
+            />
+            <UsageDialog
+              open={usageOpen}
+              onOpenChange={setUsageOpen}
+              usage={activeConversationId ? (usageMap.current.get(activeConversationId) || null) : null}
+              conversationTitle={activeConversation?.title || null}
             />
           </>
         ) : (

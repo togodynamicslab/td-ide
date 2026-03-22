@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowLeft, Bell, Bug, Loader2, Check, X } from 'lucide-react'
+import { ArrowLeft, Bell, Bug, Loader2, Check, X, Map as MapIcon } from 'lucide-react'
 import { Button } from './ui/button'
 import McpSettings from './McpSettings'
 import type { Project } from '../App'
@@ -7,9 +7,10 @@ import type { Project } from '../App'
 interface SettingsPageProps {
   project: Project | undefined
   onClose: () => void
+  onTestPlanSidebar?: () => void
 }
 
-function SettingsPage({ project, onClose }: SettingsPageProps): JSX.Element {
+function SettingsPage({ project, onClose, onTestPlanSidebar }: SettingsPageProps): JSX.Element {
   const [notifState, setNotifState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [notifError, setNotifError] = useState('')
   const [summaryState, setSummaryState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
@@ -169,6 +170,28 @@ function SettingsPage({ project, onClose }: SettingsPageProps): JSX.Element {
                   {summaryResult}
                 </div>
               )}
+            </div>
+
+            {/* Plan Sidebar */}
+            <div className="rounded-lg border border-td-border bg-td-surface/50 p-4 space-y-4 mt-4">
+              <div>
+                <h3 className="text-sm font-medium text-td-text flex items-center gap-2">
+                  <MapIcon className="h-3.5 w-3.5 text-blue-400" />
+                  Plan Sidebar
+                </h3>
+                <p className="text-xs text-td-muted mt-1">
+                  Test whether the plan mode sidebar opens with sample content.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onTestPlanSidebar}
+                disabled={!onTestPlanSidebar}
+              >
+                <MapIcon className="h-3 w-3 mr-1.5" />
+                Open test plan sidebar
+              </Button>
             </div>
           </div>
         </div>

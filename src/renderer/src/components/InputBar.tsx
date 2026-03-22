@@ -6,7 +6,7 @@ import {
   MessageSquarePlus, Eraser, HelpCircle, Hash, Sun,
   Moon, Settings, FileCode, Minimize2, FolderOpen,
   Terminal, Zap, Info, Check, Timer, RefreshCw,
-  Code2, Bug, Keyboard, BookOpen, Archive, GitFork
+  Code2, Bug, Keyboard, BookOpen, Archive, GitFork, BarChart3
 } from 'lucide-react'
 import { Button } from './ui/button'
 import {
@@ -41,6 +41,7 @@ interface InputBarProps {
   onArchiveConversation: () => void
   useWorktree: boolean
   onUseWorktreeChange: (value: boolean) => void
+  onShowUsage: () => void
 }
 
 // --- Slash command definitions ---
@@ -109,7 +110,7 @@ function InputBar({
   isLoading, queueLength, selectedModel, onModelChange,
   effortLevel, onEffortChange, permissionMode, onPermissionModeChange,
   disabledTools, onToggleTool, onArchiveConversation,
-  useWorktree, onUseWorktreeChange
+  useWorktree, onUseWorktreeChange, onShowUsage
 }: InputBarProps): JSX.Element {
   const [text, setText] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
@@ -292,6 +293,13 @@ function InputBar({
 
     // ── Info ──
     {
+      name: 'usage',
+      description: 'Show token usage and cost for this session',
+      icon: <BarChart3 className="h-3.5 w-3.5 text-green-400" />,
+      category: 'info' as SlashCategory,
+      action: () => onShowUsage()
+    },
+    {
       name: 'status',
       description: 'Show current configuration',
       icon: <Info className="h-3.5 w-3.5 text-td-muted" />,
@@ -325,7 +333,7 @@ function InputBar({
       category: 'info' as SlashCategory,
       action: () => {} // just shows the menu
     },
-  ], [onModelChange, onEffortChange, onPermissionModeChange, onNewChat, onClearConversation, onArchiveConversation, onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile, onSend, selectedModel, effortLevel, permissionMode, disabledTools])
+  ], [onModelChange, onEffortChange, onPermissionModeChange, onNewChat, onClearConversation, onArchiveConversation, onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile, onSend, onShowUsage, selectedModel, effortLevel, permissionMode, disabledTools])
 
   // Parse slash input
   const slashParse = useMemo(() => {
