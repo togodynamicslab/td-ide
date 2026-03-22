@@ -580,7 +580,7 @@ const PERMISSION_MAP: Record<string, string> = {
   plan: 'plan'
 }
 
-function launchClaude(message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools: string[] = []): void {
+function launchClaude(message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools: string[] = [], apiKey = '', apiProvider = 'anthropic'): void {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
 
   if (model && model !== 'opus') args.push('--model', model)
@@ -599,13 +599,23 @@ function launchClaude(message: string, conversationId: string, cwd: string, mode
     args.push('--resume', existingSessionId)
   }
 
-  console.log('[td-ide] conv:', conversationId, '| resume:', existingSessionId || 'new')
+  console.log('[td-ide] conv:', conversationId, '| resume:', existingSessionId || 'new', '| provider:', apiProvider)
+
+  // Build env with API key if using API key mode
+  const env = { ...process.env }
+  if (apiKey) {
+    if (apiProvider === 'openrouter') {
+      env.OPENROUTER_API_KEY = apiKey
+    } else {
+      env.ANTHROPIC_API_KEY = apiKey
+    }
+  }
 
   const proc = spawn('claude', args, {
     cwd: cwd || app.getPath('home'),
     shell: true,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env }
+    env
   })
 
   claudeProcesses.set(conversationId, proc)
@@ -675,15 +685,15 @@ function launchClaude(message: string, conversationId: string, cwd: string, mode
   })
 }
 
-ipcMain.on('claude:send-message', (_event, { message, conversationId, cwd, model, effort, permissionMode, disabledTools }) => {
+ipcMain.on('claude:send-message', (_event, { message, conversationId, cwd, model, effort, permissionMode, disabledTools, apiKey, apiProvider }) => {
   const existing = claudeProcesses.get(conversationId)
   if (existing && !existing.killed) {
     existing.once('close', () => {
-      launchClaude(message, conversationId, cwd, model, effort, permissionMode, disabledTools)
+      launchClaude(message, conversationId, cwd, model, effort, permissionMode, disabledTools, apiKey, apiProvider)
     })
     existing.kill()
   } else {
-    launchClaude(message, conversationId, cwd, model, effort, permissionMode, disabledTools)
+    launchClaude(message, conversationId, cwd, model, effort, permissionMode, disabledTools, apiKey, apiProvider)
   }
 })
 

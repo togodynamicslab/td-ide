@@ -61,6 +61,8 @@ export interface Project {
 export type ModelId = 'opus' | 'sonnet' | 'haiku'
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max'
 export type PermissionMode = 'full' | 'default' | 'plan'
+export type ApiProvider = 'anthropic' | 'openrouter'
+export type ApiMode = 'subscription' | 'apikey'
 
 export interface ModelUsageEntry {
   model: string
@@ -80,6 +82,7 @@ export interface ConversationUsage {
   turns: number
   durationMs: number
   modelUsage: Record<string, ModelUsageEntry>
+  rateLimitResetsAt?: number
 }
 
 interface StreamBuffer {
@@ -98,6 +101,10 @@ function App(): JSX.Element {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [loadingConvs, setLoadingConvs] = useState<Set<string>>(new Set())
   const [selectedModel, setSelectedModel] = useState<ModelId>('opus')
+  const [apiMode, setApiMode] = useState<ApiMode>('subscription')
+  const [apiProvider, setApiProvider] = useState<ApiProvider>('anthropic')
+  const [apiKey, setApiKey] = useState('')
+  const [customModel, setCustomModel] = useState('')
   const [effortLevel, setEffortLevel] = useState<EffortLevel>('high')
   const [perConvPermission, setPerConvPermission] = useState<Map<string, PermissionMode>>(new Map())
   const [disabledTools, setDisabledTools] = useState<Set<string>>(new Set())
@@ -185,6 +192,18 @@ function App(): JSX.Element {
       if (state.terminalOpen === 'true') {
         setTerminalOpen(true)
       }
+      if (state.apiMode && ['subscription', 'apikey'].includes(state.apiMode)) {
+        setApiMode(state.apiMode as ApiMode)
+      }
+      if (state.apiProvider && ['anthropic', 'openrouter'].includes(state.apiProvider)) {
+        setApiProvider(state.apiProvider as ApiProvider)
+      }
+      if (state.apiKey) {
+        setApiKey(state.apiKey)
+      }
+      if (state.customModel) {
+        setCustomModel(state.customModel)
+      }
 
       // Detect interrupted sessions from previous run
       const interrupted = await window.api.getInterruptedProcesses()
@@ -231,6 +250,26 @@ function App(): JSX.Element {
     if (!stateRestored) return
     window.api.setAppState('terminalOpen', terminalOpen ? 'true' : 'false')
   }, [terminalOpen, stateRestored])
+
+  useEffect(() => {
+    if (!stateRestored) return
+    window.api.setAppState('apiMode', apiMode)
+  }, [apiMode, stateRestored])
+
+  useEffect(() => {
+    if (!stateRestored) return
+    window.api.setAppState('apiProvider', apiProvider)
+  }, [apiProvider, stateRestored])
+
+  useEffect(() => {
+    if (!stateRestored) return
+    window.api.setAppState('apiKey', apiKey)
+  }, [apiKey, stateRestored])
+
+  useEffect(() => {
+    if (!stateRestored) return
+    window.api.setAppState('customModel', customModel)
+  }, [customModel, stateRestored])
 
   // --- Load conversations when project changes ---
   useEffect(() => {
@@ -563,9 +602,10 @@ function App(): JSX.Element {
       // Use worktree path if the conversation has one, otherwise project path
       const conv = activeProject.conversations.find((c) => c.id === convId)
       const cwd = conv?.worktreePath || activeProject.path
-      window.api.sendMessage(messageText, convId, cwd, selectedModel, effortLevel, permissionMode, Array.from(disabledTools))
+      const modelToSend = apiMode === 'apikey' && customModel ? customModel : selectedModel
+      window.api.sendMessage(messageText, convId, cwd, modelToSend, effortLevel, permissionMode, Array.from(disabledTools), apiMode === 'apikey' ? apiKey : '', apiMode === 'apikey' ? apiProvider : 'anthropic')
     },
-    [activeConversationId, activeProject, activeProjectId, createConversation, addMessage, selectedModel, effortLevel, permissionMode, disabledTools]
+    [activeConversationId, activeProject, activeProjectId, createConversation, addMessage, selectedModel, effortLevel, permissionMode, disabledTools, apiMode, apiKey, apiProvider, customModel]
   )
 
   // Keep ref in sync so handleDone (inside useEffect) can call the latest processMessage
@@ -601,6 +641,18 @@ function App(): JSX.Element {
   useEffect(() => {
     const unsubStream = window.api.onStream((conversationId: string, data: unknown) => {
       const c = data as Record<string, unknown>
+
+      // Capture rate limit info (fires outside of buffer context)
+      if (c.type === 'rate_limit_event') {
+        const info = c.rate_limit_info as Record<string, unknown> | undefined
+        if (info) {
+          const prev = usageMap.current.get(conversationId)
+          if (prev) {
+            prev.rateLimitResetsAt = Number(info.resetsAt) || 0
+          }
+        }
+      }
+
       const buf = buffers.current.get(conversationId)
       if (!buf) return
 
@@ -669,10 +721,27 @@ function App(): JSX.Element {
         // Accumulate usage stats from result
         const costUsd = typeof c.total_cost_usd === 'number' ? c.total_cost_usd : 0
         const resultUsage = c.usage as Record<string, unknown> | undefined
+        const resultModelUsage = c.modelUsage as Record<string, Record<string, unknown>> | undefined
         if (resultUsage || costUsd) {
           const prev = usageMap.current.get(conversationId) || {
             totalCostUsd: 0, inputTokens: 0, outputTokens: 0,
-            cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0
+            cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0,
+            durationMs: 0, modelUsage: {}
+          }
+          // Merge per-model usage
+          const mergedModels = { ...prev.modelUsage }
+          if (resultModelUsage) {
+            for (const [model, data] of Object.entries(resultModelUsage)) {
+              const existing = mergedModels[model]
+              mergedModels[model] = {
+                model,
+                inputTokens: (existing?.inputTokens || 0) + (Number(data.inputTokens) || 0),
+                outputTokens: (existing?.outputTokens || 0) + (Number(data.outputTokens) || 0),
+                cacheReadInputTokens: (existing?.cacheReadInputTokens || 0) + (Number(data.cacheReadInputTokens) || 0),
+                cacheCreationInputTokens: (existing?.cacheCreationInputTokens || 0) + (Number(data.cacheCreationInputTokens) || 0),
+                costUSD: (existing?.costUSD || 0) + (Number(data.costUSD) || 0)
+              }
+            }
           }
           usageMap.current.set(conversationId, {
             totalCostUsd: prev.totalCostUsd + costUsd,
@@ -680,7 +749,10 @@ function App(): JSX.Element {
             outputTokens: prev.outputTokens + (Number(resultUsage?.output_tokens) || 0),
             cacheReadTokens: prev.cacheReadTokens + (Number(resultUsage?.cache_read_input_tokens) || 0),
             cacheCreationTokens: prev.cacheCreationTokens + (Number(resultUsage?.cache_creation_input_tokens) || 0),
-            turns: prev.turns + (Number(c.num_turns) || 1)
+            turns: prev.turns + (Number(c.num_turns) || 1),
+            durationMs: prev.durationMs + (Number(c.duration_ms) || 0),
+            modelUsage: mergedModels,
+            rateLimitResetsAt: prev.rateLimitResetsAt
           })
         }
 
@@ -1036,19 +1108,6 @@ function App(): JSX.Element {
                     messages={activeConversation?.messages || []}
                     isLoading={isLoading}
                     permissionMode={permissionMode}
-                    isInterrupted={activeConversationId ? interruptedConvIds.has(activeConversationId) : false}
-                    onResumeInterrupted={() => {
-                      handleSend('Continue from where you left off. The previous session was interrupted.')
-                    }}
-                    onDismissInterrupted={() => {
-                      if (activeConversationId) {
-                        setInterruptedConvIds((prev) => {
-                          const next = new Set(prev)
-                          next.delete(activeConversationId)
-                          return next
-                        })
-                      }
-                    }}
                   />
                 </div>
                 {terminalOpen && (
@@ -1134,6 +1193,14 @@ function App(): JSX.Element {
               useWorktree={useWorktree}
               onUseWorktreeChange={setUseWorktree}
               onShowUsage={() => setUsageOpen(true)}
+              apiMode={apiMode}
+              onApiModeChange={setApiMode}
+              apiProvider={apiProvider}
+              onApiProviderChange={setApiProvider}
+              apiKey={apiKey}
+              onApiKeyChange={setApiKey}
+              customModel={customModel}
+              onCustomModelChange={setCustomModel}
             />
             <UsageDialog
               open={usageOpen}

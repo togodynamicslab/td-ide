@@ -8,7 +8,7 @@ interface ClaudeAPI {
   windowIsMaximized: () => Promise<boolean>
 
   // Claude process
-  sendMessage: (message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools?: string[]) => void
+  sendMessage: (message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools?: string[], apiKey?: string, apiProvider?: string) => void
   cancelMessage: (conversationId: string) => void
 
   // Dialog / files

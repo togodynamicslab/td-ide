@@ -9,8 +9,8 @@ const api = {
   windowIsMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
 
   // Claude process
-  sendMessage: (message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools: string[] = []) => {
-    ipcRenderer.send('claude:send-message', { message, conversationId, cwd, model, effort, permissionMode, disabledTools })
+  sendMessage: (message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools: string[] = [], apiKey = '', apiProvider = 'anthropic') => {
+    ipcRenderer.send('claude:send-message', { message, conversationId, cwd, model, effort, permissionMode, disabledTools, apiKey, apiProvider })
   },
   cancelMessage: (conversationId: string) => {
     ipcRenderer.send('claude:cancel', { conversationId })
