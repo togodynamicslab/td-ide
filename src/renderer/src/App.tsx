@@ -107,6 +107,7 @@ function App(): JSX.Element {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [loadingConvs, setLoadingConvs] = useState<Set<string>>(new Set())
+  const [recentlyRetitled, setRecentlyRetitled] = useState<Set<string>>(new Set())
   const [selectedModel, setSelectedModel] = useState<ModelId>('opus')
   const [apiMode, setApiMode] = useState<ApiMode>('subscription')
   const [apiProvider, setApiProvider] = useState<ApiProvider>('anthropic')
@@ -124,6 +125,7 @@ function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false)
   const [planContent, setPlanContent] = useState('')
+  const [planConvId, setPlanConvId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(300)
   const [useWorktree, setUseWorktree] = useState(false)
@@ -753,7 +755,6 @@ function App(): JSX.Element {
         }
       } else if (c.type === 'result') {
         const duration = Date.now() - buf.startedAt
-        console.log('[plan-debug] result event |', { convId: conversationId, permissionMode: buf.permissionMode, bufTextLen: buf.text.length, resultType: typeof c.result, resultLen: typeof c.result === 'string' ? (c.result as string).length : 0 })
         if (typeof c.result === 'string') {
           buf.text = c.result as string
           // Rebuild contentBlocks for result override — result replaces all text
@@ -763,11 +764,11 @@ function App(): JSX.Element {
         updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
 
         // Auto-capture plan content when in plan mode
-        console.log('[plan-debug] plan check |', { permissionMode: buf.permissionMode, hasText: !!buf.text.trim(), willOpen: buf.permissionMode === 'plan' && !!buf.text.trim() })
         if (buf.permissionMode === 'plan' && buf.text.trim()) {
-          console.log('[plan-debug] OPENING plan sidebar!')
           planDrafts.current.set(conversationId, buf.text)
           setPlanContent(buf.text)
+          setPlanConvId(conversationId)
+          setActiveConversationId(conversationId)
           setPlanSidebarOpen(true)
         }
 
@@ -859,6 +860,8 @@ function App(): JSX.Element {
         if (buf.permissionMode === 'plan' && buf.text.trim()) {
           planDrafts.current.set(conversationId, buf.text)
           setPlanContent(buf.text)
+          setPlanConvId(conversationId)
+          setActiveConversationId(conversationId)
           setPlanSidebarOpen(true)
         }
 
@@ -870,6 +873,8 @@ function App(): JSX.Element {
       if (convMode === 'plan' && assistantText.trim() && !planDrafts.current.has(conversationId)) {
         planDrafts.current.set(conversationId, assistantText)
         setPlanContent(assistantText)
+        setPlanConvId(conversationId)
+        setActiveConversationId(conversationId)
         setPlanSidebarOpen(true)
       }
       convPermissionModes.current.delete(conversationId)
@@ -879,14 +884,17 @@ function App(): JSX.Element {
         return next
       })
 
-      // Auto-generate title after first response if not manually edited
+      // Auto-generate/update title after each response if not manually edited
       setProjects((prev) => {
         for (const p of prev) {
           const conv = p.conversations.find((c) => c.id === conversationId)
-          if (conv && !conv.titleEdited && conv.messages.length <= 2) {
-            const firstUserMsg = conv.messages.find((m) => m.role === 'user')
-            if (firstUserMsg) {
-              window.api.generateTitle(conversationId, firstUserMsg.content).then((newTitle) => {
+          if (conv && !conv.titleEdited) {
+            // Collect the last few user and assistant messages for context
+            const recentMsgs = conv.messages.slice(-4)
+            const userParts = recentMsgs.filter((m) => m.role === 'user').map((m) => m.content).join('\n')
+            const assistantParts = recentMsgs.filter((m) => m.role === 'assistant').map((m) => m.content).join('\n')
+            if (userParts) {
+              window.api.generateTitle(conversationId, userParts, assistantParts).then((newTitle) => {
                 if (newTitle) {
                   setProjects((p2) =>
                     p2.map((proj) => ({
@@ -896,6 +904,15 @@ function App(): JSX.Element {
                       )
                     }))
                   )
+                  // Flash "title updated" indicator
+                  setRecentlyRetitled((s) => new Set(s).add(conversationId))
+                  setTimeout(() => {
+                    setRecentlyRetitled((s) => {
+                      const next = new Set(s)
+                      next.delete(conversationId)
+                      return next
+                    })
+                  }, 3000)
                 }
               })
             }
@@ -1132,11 +1149,16 @@ function App(): JSX.Element {
   }, [activeProject])
 
   const handleExecutePlan = useCallback((plan: string) => {
-    // Switch to full access and send the plan as a message
+    // Switch to full access and send the plan as a message to the plan's conversation
     setPermissionMode('full')
     setPlanSidebarOpen(false)
-    handleSend(`Execute this plan:\n\n${plan}`)
-  }, [handleSend])
+    const targetConvId = planConvId || activeConversationId
+    if (targetConvId) {
+      setActiveConversationId(targetConvId)
+      processMessage(`Execute this plan:\n\n${plan}`, [], targetConvId)
+    }
+    setPlanConvId(null)
+  }, [planConvId, activeConversationId, processMessage])
 
   // Sync plan content when switching conversations
   useEffect(() => {
@@ -1189,6 +1211,7 @@ function App(): JSX.Element {
         onDeleteAllArchived={handleDeleteAllArchived}
         onNewChatForProject={handleNewChatForProject}
         onOpenSettings={() => setSettingsOpen(true)}
+        recentlyRetitled={recentlyRetitled}
       />
       {settingsOpen ? (
         <SettingsPage project={activeProject} onClose={() => setSettingsOpen(false)} onTestPlanSidebar={() => {
