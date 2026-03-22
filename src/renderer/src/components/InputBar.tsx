@@ -508,7 +508,9 @@ function InputBar({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="border-t border-td-border bg-td-bg px-6 py-3">
+      <div className="bg-td-bg">
+        <div className="mx-2 h-px bg-td-border" />
+        <div className="px-6 py-3">
         <div className="max-w-3xl mx-auto">
           <form onSubmit={handleSubmit} className="w-full">
             <div className="relative">
@@ -883,6 +885,7 @@ function InputBar({
             </div>
             </div>
           </form>
+        </div>
         </div>
       </div>
     </TooltipProvider>

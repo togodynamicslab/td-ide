@@ -61,6 +61,15 @@ export type ModelId = 'opus' | 'sonnet' | 'haiku'
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max'
 export type PermissionMode = 'full' | 'default' | 'plan'
 
+export interface ConversationUsage {
+  totalCostUsd: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  turns: number
+}
+
 interface StreamBuffer {
   text: string
   tools: ToolBlock[]
@@ -91,8 +100,11 @@ function App(): JSX.Element {
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(300)
   const [useWorktree, setUseWorktree] = useState(false)
   const [interruptedConvIds, setInterruptedConvIds] = useState<Set<string>>(new Set())
+  const [usageOpen, setUsageOpen] = useState(false)
   const stateRestored = useRef(false)
 
+  // Per-conversation usage tracking
+  const usageMap = useRef(new Map<string, ConversationUsage>())
   // Per-conversation plan content
   const planDrafts = useRef(new Map<string, string>())
   // Per-conversation stream buffers for parallel support
@@ -642,6 +654,24 @@ function App(): JSX.Element {
           setPlanSidebarOpen(true)
         }
 
+        // Accumulate usage stats from result
+        const costUsd = typeof c.total_cost_usd === 'number' ? c.total_cost_usd : 0
+        const resultUsage = c.usage as Record<string, unknown> | undefined
+        if (resultUsage || costUsd) {
+          const prev = usageMap.current.get(conversationId) || {
+            totalCostUsd: 0, inputTokens: 0, outputTokens: 0,
+            cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0
+          }
+          usageMap.current.set(conversationId, {
+            totalCostUsd: prev.totalCostUsd + costUsd,
+            inputTokens: prev.inputTokens + (Number(resultUsage?.input_tokens) || 0),
+            outputTokens: prev.outputTokens + (Number(resultUsage?.output_tokens) || 0),
+            cacheReadTokens: prev.cacheReadTokens + (Number(resultUsage?.cache_read_input_tokens) || 0),
+            cacheCreationTokens: prev.cacheCreationTokens + (Number(resultUsage?.cache_creation_input_tokens) || 0),
+            turns: prev.turns + (Number(c.num_turns) || 1)
+          })
+        }
+
         const denials = c.permission_denials as unknown[] | undefined
         if (denials && Array.isArray(denials) && denials.length > 0) {
           setPermissionDenied(true)
@@ -731,8 +761,8 @@ function App(): JSX.Element {
         return prev
       })
 
-      // Send desktop notification with AI-generated summary
-      if (assistantText) {
+      // Send desktop notification only when the window is not focused
+      if (assistantText && document.hidden) {
         setProjects((prev) => {
           let convTitle = 'Chat'
           for (const p of prev) {

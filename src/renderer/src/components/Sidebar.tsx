@@ -466,7 +466,7 @@ function AppSidebar({
         <SidebarSeparator />
 
         {/* Footer */}
-        <SidebarFooter>
+        <SidebarFooter className="pb-7">
           <MemoryIndicator />
           <SidebarMenu>
             <SidebarMenuItem>
