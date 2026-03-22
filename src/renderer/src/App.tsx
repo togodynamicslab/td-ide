@@ -638,6 +638,7 @@ function App(): JSX.Element {
         // Auto-capture plan content when in plan mode
         if (buf.permissionMode === 'plan' && buf.text.trim()) {
           planDrafts.current.set(conversationId, buf.text)
+          setPlanContent(buf.text)
           setPlanSidebarOpen(true)
         }
 
@@ -683,6 +684,7 @@ function App(): JSX.Element {
         // Fallback: open plan sidebar if result event didn't trigger it
         if (buf.permissionMode === 'plan' && buf.text.trim()) {
           planDrafts.current.set(conversationId, buf.text)
+          setPlanContent(buf.text)
           setPlanSidebarOpen(true)
         }
 
@@ -693,6 +695,7 @@ function App(): JSX.Element {
       const convMode = convPermissionModes.current.get(conversationId)
       if (convMode === 'plan' && assistantText.trim() && !planDrafts.current.has(conversationId)) {
         planDrafts.current.set(conversationId, assistantText)
+        setPlanContent(assistantText)
         setPlanSidebarOpen(true)
       }
       convPermissionModes.current.delete(conversationId)
