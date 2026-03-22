@@ -14,7 +14,8 @@ import {
   Loader2,
   CheckCircle2,
   Archive,
-  ArchiveRestore
+  ArchiveRestore,
+  GitFork
 } from 'lucide-react'
 import WindowControls from './WindowControls'
 import { Button } from './ui/button'
@@ -327,7 +328,9 @@ function AppSidebar({
                                   ) : recentlyFinished.has(conv.id) ? (
                                     <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />
                                   ) : (
-                                    <MessageSquare className={`h-3 w-3 shrink-0 ${conv.archived ? 'text-td-muted/50' : 'text-td-muted'}`} />
+                                    conv.worktreePath
+                                      ? <GitFork className="h-3 w-3 shrink-0 text-purple-400" />
+                                      : <MessageSquare className={`h-3 w-3 shrink-0 ${conv.archived ? 'text-td-muted/50' : 'text-td-muted'}`} />
                                   )}
                                   {editingId === `conv-${conv.id}` ? (
                                     <input

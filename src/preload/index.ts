@@ -113,6 +113,12 @@ const api = {
   generateTitle: (conversationId: string, userMessage: string): Promise<string | null> => {
     return ipcRenderer.invoke('db:generate-title', { conversationId, userMessage })
   },
+  setConversationWorktree: (id: string, worktreePath: string | null): Promise<boolean> => {
+    return ipcRenderer.invoke('db:set-conversation-worktree', { id, worktreePath })
+  },
+  getConversationWorktree: (id: string): Promise<string | null> => {
+    return ipcRenderer.invoke('db:get-conversation-worktree', { id })
+  },
   deleteConversation: (id: string): Promise<boolean> => {
     return ipcRenderer.invoke('db:delete-conversation', { id })
   },
@@ -121,11 +127,11 @@ const api = {
   getMessages: (conversationId: string): Promise<unknown[]> => {
     return ipcRenderer.invoke('db:get-messages', { conversationId })
   },
-  addMessage: (id: string, conversationId: string, role: 'user' | 'assistant', content: string, tools: string, reasoning: string, images: string): Promise<boolean> => {
-    return ipcRenderer.invoke('db:add-message', { id, conversationId, role, content, tools, reasoning, images })
+  addMessage: (id: string, conversationId: string, role: 'user' | 'assistant', content: string, tools: string, reasoning: string, images: string, contentBlocks = '[]'): Promise<boolean> => {
+    return ipcRenderer.invoke('db:add-message', { id, conversationId, role, content, tools, reasoning, images, contentBlocks })
   },
-  updateMessage: (id: string, content: string, tools: string, reasoning: string, duration?: number): Promise<boolean> => {
-    return ipcRenderer.invoke('db:update-message', { id, content, tools, reasoning, duration })
+  updateMessage: (id: string, content: string, tools: string, reasoning: string, duration?: number, contentBlocks = '[]'): Promise<boolean> => {
+    return ipcRenderer.invoke('db:update-message', { id, content, tools, reasoning, duration, contentBlocks })
   },
 
   // Notifications
@@ -134,6 +140,49 @@ const api = {
   },
   generateNotificationSummary: (assistantText: string, conversationTitle: string): Promise<string | null> => {
     return ipcRenderer.invoke('notify:generate-summary', { assistantText, conversationTitle })
+  },
+
+  // Terminal
+  terminalCreate: (id: string, cwd: string, shell?: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('terminal:create', { id, cwd, shell })
+  },
+  terminalInput: (id: string, data: string): void => {
+    ipcRenderer.send('terminal:input', { id, data })
+  },
+  terminalResize: (id: string, cols: number, rows: number): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('terminal:resize', { id, cols, rows })
+  },
+  terminalClose: (id: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('terminal:close', { id })
+  },
+  onTerminalData: (callback: (id: string, data: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; data: string }) =>
+      callback(payload.id, payload.data)
+    ipcRenderer.on('terminal:data', handler)
+    return () => ipcRenderer.removeListener('terminal:data', handler)
+  },
+  onTerminalExit: (callback: (id: string, exitCode: number) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; exitCode: number }) =>
+      callback(payload.id, payload.exitCode)
+    ipcRenderer.on('terminal:exit', handler)
+    return () => ipcRenderer.removeListener('terminal:exit', handler)
+  },
+
+  // App State (session recovery)
+  getAppState: (key: string): Promise<string | null> => {
+    return ipcRenderer.invoke('state:get', { key })
+  },
+  setAppState: (key: string, value: string): Promise<boolean> => {
+    return ipcRenderer.invoke('state:set', { key, value })
+  },
+  getAllAppState: (): Promise<Record<string, string>> => {
+    return ipcRenderer.invoke('state:get-all')
+  },
+  getInterruptedProcesses: (): Promise<{ conversationId: string; pid: number; startedAt: number; alive: boolean }[]> => {
+    return ipcRenderer.invoke('process:get-interrupted')
+  },
+  killOrphanProcess: (pid: number): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('process:kill-orphan', { pid })
   },
 
   // Stream listeners

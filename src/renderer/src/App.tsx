@@ -7,6 +7,8 @@ import InputBar from './components/InputBar'
 import PermissionBanner from './components/PermissionBanner'
 import PlanSidebar from './components/PlanSidebar'
 import SettingsPage from './components/SettingsPage'
+import TerminalPanel from './components/TerminalPanel'
+import ResizeHandle from './components/ResizeHandle'
 
 export interface ToolBlock {
   id: string
@@ -21,6 +23,11 @@ export interface ImageAttachment {
   filePath?: string
 }
 
+export type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; tool: ToolBlock }
+  | { type: 'thinking'; thinking: string }
+
 export interface Message {
   id: string
   role: 'user' | 'assistant'
@@ -28,6 +35,7 @@ export interface Message {
   tools: ToolBlock[]
   reasoning: string
   images: ImageAttachment[]
+  contentBlocks: ContentBlock[]
   duration?: number
   timestamp: Date
 }
@@ -38,6 +46,7 @@ export interface Conversation {
   messages: Message[]
   archived: boolean
   titleEdited: boolean
+  worktreePath: string | null
   createdAt: Date
 }
 
@@ -56,6 +65,7 @@ interface StreamBuffer {
   text: string
   tools: ToolBlock[]
   reasoning: string
+  contentBlocks: ContentBlock[]
   assistantMsgId: string
   startedAt: number
   permissionMode: PermissionMode
@@ -76,6 +86,11 @@ function App(): JSX.Element {
   const [gitBranch, setGitBranch] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false)
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalPanelHeight, setTerminalPanelHeight] = useState(300)
+  const [useWorktree, setUseWorktree] = useState(false)
+  const [interruptedConvIds, setInterruptedConvIds] = useState<Set<string>>(new Set())
+  const [stateRestored, setStateRestored] = useState(false)
 
   // Per-conversation plan content
   const planDrafts = useRef(new Map<string, string>())
@@ -102,7 +117,7 @@ function App(): JSX.Element {
   // Per-conversation permission mode (defaults to 'full')
   const permissionMode: PermissionMode = activeConversationId
     ? (perConvPermission.get(activeConversationId) || 'full')
-    : 'full'
+    : (perConvPermission.get('__new__') || 'full')
   const setPermissionMode = useCallback((mode: PermissionMode) => {
     const key = activeConversationId || '__new__'
     setPerConvPermission((prev) => {
@@ -130,12 +145,13 @@ function App(): JSX.Element {
   useEffect(() => {
     if (!activeProjectId) return
     window.api.getConversations(activeProjectId).then((rows) => {
-      const convs: Conversation[] = (rows as { id: string; title: string; archived: boolean | number; titleEdited: boolean | number; createdAt: Date }[]).map((r) => ({
+      const convs: Conversation[] = (rows as { id: string; title: string; archived: boolean | number; titleEdited: boolean | number; worktreePath?: string | null; createdAt: Date }[]).map((r) => ({
         id: r.id,
         title: r.title,
         messages: [],
         archived: !!r.archived,
         titleEdited: !!r.titleEdited,
+        worktreePath: r.worktreePath ?? null,
         createdAt: new Date(r.createdAt)
       }))
       // Sort newest first
@@ -177,17 +193,32 @@ function App(): JSX.Element {
     window.api.getMessages(activeConversationId).then((rows) => {
       const msgs: Message[] = (rows as {
         id: string; role: 'user' | 'assistant'; content: string;
-        tools: string; reasoning: string; images: string; duration: number | null; createdAt: Date
-      }[]).map((r) => ({
-        id: r.id,
-        role: r.role,
-        content: r.content,
-        tools: JSON.parse(r.tools || '[]'),
-        reasoning: r.reasoning || '',
-        images: JSON.parse(r.images || '[]'),
-        ...(r.duration != null ? { duration: r.duration } : {}),
-        timestamp: new Date(r.createdAt)
-      }))
+        tools: string; reasoning: string; images: string; contentBlocks?: string; duration: number | null; createdAt: Date
+      }[]).map((r) => {
+        const tools = JSON.parse(r.tools || '[]')
+        const reasoning = r.reasoning || ''
+        let contentBlocks: ContentBlock[] = []
+        try {
+          contentBlocks = JSON.parse(r.contentBlocks || '[]')
+        } catch { /* ignore */ }
+        // Rebuild blocks from legacy data if not present
+        if (contentBlocks.length === 0 && (r.content || tools.length > 0 || reasoning)) {
+          if (reasoning) contentBlocks.push({ type: 'thinking', thinking: reasoning })
+          if (r.content) contentBlocks.push({ type: 'text', text: r.content })
+          for (const tool of tools) contentBlocks.push({ type: 'tool_use', tool })
+        }
+        return {
+          id: r.id,
+          role: r.role,
+          content: r.content,
+          tools,
+          reasoning,
+          images: JSON.parse(r.images || '[]'),
+          contentBlocks,
+          ...(r.duration != null ? { duration: r.duration } : {}),
+          timestamp: new Date(r.createdAt)
+        }
+      })
       // Always cache so the conversations effect can pick them up if it resolves later
       messagesCache.current.set(activeConversationId, msgs)
       loadedConvs.current.add(activeConversationId)
@@ -218,15 +249,29 @@ function App(): JSX.Element {
   // --- Conversation management ---
   const createConversation = useCallback(
     async (title: string): Promise<string> => {
-      if (!activeProjectId) return ''
+      if (!activeProjectId || !activeProject) return ''
       const id = Date.now().toString()
       await window.api.addConversation(id, activeProjectId, title)
+
+      let worktreePath: string | null = null
+      if (useWorktree) {
+        const branchName = `td-${id}`
+        const wtPath = `${activeProject.path}/../.td-worktrees/${branchName}`
+        const result = await window.api.gitWorktreeAdd(activeProject.path, wtPath, undefined, branchName)
+        if (result.success) {
+          worktreePath = wtPath
+          await window.api.setConversationWorktree(id, wtPath)
+        }
+        setUseWorktree(false)
+      }
+
       const conversation: Conversation = {
         id,
         title,
         messages: [],
         archived: false,
         titleEdited: false,
+        worktreePath,
         createdAt: new Date()
       }
       loadedConvs.current.add(id)
@@ -251,7 +296,7 @@ function App(): JSX.Element {
       setActiveConversationId(id)
       return id
     },
-    [activeProjectId]
+    [activeProjectId, activeProject, useWorktree]
   )
 
   // --- Message helpers ---
@@ -272,7 +317,7 @@ function App(): JSX.Element {
   )
 
   const updateLastAssistantMessage = useCallback(
-    (conversationId: string, content: string, tools: ToolBlock[], reasoning: string, duration?: number) => {
+    (conversationId: string, content: string, tools: ToolBlock[], reasoning: string, contentBlocks: ContentBlock[], duration?: number) => {
       setProjects((prev) =>
         prev.map((p) => ({
           ...p,
@@ -281,7 +326,7 @@ function App(): JSX.Element {
             const messages = [...c.messages]
             const lastIdx = messages.length - 1
             if (lastIdx >= 0 && messages[lastIdx].role === 'assistant') {
-              messages[lastIdx] = { ...messages[lastIdx], content, tools: [...tools], reasoning, ...(duration != null ? { duration } : {}) }
+              messages[lastIdx] = { ...messages[lastIdx], content, tools: [...tools], reasoning, contentBlocks: [...contentBlocks], ...(duration != null ? { duration } : {}) }
             }
             return { ...c, messages }
           })
@@ -306,7 +351,7 @@ function App(): JSX.Element {
       const userMsgId = Date.now().toString()
       const userMessage: Message = {
         id: userMsgId, role: 'user', content: text,
-        tools: [], reasoning: '', images: [], timestamp: new Date()
+        tools: [], reasoning: '', images: [], contentBlocks: [], timestamp: new Date()
       }
       addMessage(convId, userMessage)
       window.api.addMessage(userMsgId, convId, 'user', text, '[]', '', '[]')
@@ -315,7 +360,7 @@ function App(): JSX.Element {
       const assistantMsgId = (Date.now() + 1).toString()
       const assistantMessage: Message = {
         id: assistantMsgId, role: 'assistant', content: '',
-        tools: [], reasoning: '', images: [], timestamp: new Date()
+        tools: [], reasoning: '', images: [], contentBlocks: [], timestamp: new Date()
       }
       addMessage(convId, assistantMessage)
       window.api.addMessage(assistantMsgId, convId, 'assistant', '', '[]', '', '[]')
@@ -345,12 +390,12 @@ function App(): JSX.Element {
           content = `Command completed with exit code ${result.exitCode}.`
         }
 
-        updateLastAssistantMessage(convId!, content, [], '', duration)
+        updateLastAssistantMessage(convId!, content, [], '', [], duration)
         window.api.updateMessage(assistantMsgId, content, '[]', '', duration)
       } catch (err) {
         const duration = Date.now() - startedAt
         const content = `**Error:** ${(err as Error).message || 'Command execution failed'}`
-        updateLastAssistantMessage(convId!, content, [], '', duration)
+        updateLastAssistantMessage(convId!, content, [], '', [], duration)
         window.api.updateMessage(assistantMsgId, content, '[]', '', duration)
       } finally {
         setLoadingConvs((prev) => {
@@ -391,6 +436,7 @@ function App(): JSX.Element {
         tools: [],
         reasoning: '',
         images: savedImages,
+        contentBlocks: [],
         timestamp: new Date()
       }
       addMessage(convId, userMessage)
@@ -404,16 +450,20 @@ function App(): JSX.Element {
         tools: [],
         reasoning: '',
         images: [],
+        contentBlocks: [],
         timestamp: new Date()
       }
       addMessage(convId, assistantMessage)
       window.api.addMessage(assistantMsgId, convId, 'assistant', '', '[]', '', '[]')
 
       // Initialize per-conversation buffer
-      buffers.current.set(convId, { text: '', tools: [], reasoning: '', assistantMsgId, startedAt: Date.now(), permissionMode })
+      buffers.current.set(convId, { text: '', tools: [], reasoning: '', contentBlocks: [], assistantMsgId, startedAt: Date.now(), permissionMode })
 
       setLoadingConvs((prev) => new Set(prev).add(convId!))
-      window.api.sendMessage(messageText, convId, activeProject.path, selectedModel, effortLevel, permissionMode, Array.from(disabledTools))
+      // Use worktree path if the conversation has one, otherwise project path
+      const conv = activeProject.conversations.find((c) => c.id === convId)
+      const cwd = conv?.worktreePath || activeProject.path
+      window.api.sendMessage(messageText, convId, cwd, selectedModel, effortLevel, permissionMode, Array.from(disabledTools))
     },
     [activeConversationId, activeProject, activeProjectId, createConversation, addMessage, selectedModel, effortLevel, permissionMode, disabledTools]
   )
@@ -454,6 +504,17 @@ function App(): JSX.Element {
       const buf = buffers.current.get(conversationId)
       if (!buf) return
 
+      // Helper: append to last block of same type, or create new block
+      const appendBlock = (type: 'text' | 'thinking', value: string) => {
+        const last = buf.contentBlocks[buf.contentBlocks.length - 1]
+        if (last && last.type === type) {
+          if (type === 'text') (last as { type: 'text'; text: string }).text += value
+          else (last as { type: 'thinking'; thinking: string }).thinking += value
+        } else {
+          buf.contentBlocks.push(type === 'text' ? { type: 'text', text: value } : { type: 'thinking', thinking: value })
+        }
+      }
+
       if (c.type === 'assistant' && c.message) {
         const msg = c.message as Record<string, unknown>
         if (msg.content && Array.isArray(msg.content)) {
@@ -461,33 +522,42 @@ function App(): JSX.Element {
             const b = block as Record<string, unknown>
             if (b.type === 'text' && typeof b.text === 'string') {
               buf.text += b.text
+              appendBlock('text', b.text)
             } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
               buf.reasoning += b.thinking
+              appendBlock('thinking', b.thinking)
             } else if (b.type === 'tool_use') {
-              buf.tools.push({
+              const tool: ToolBlock = {
                 id: (b.id as string) || Date.now().toString(),
                 name: (b.name as string) || 'Unknown',
                 input: (b.input as Record<string, unknown>) || {}
-              })
+              }
+              buf.tools.push(tool)
+              buf.contentBlocks.push({ type: 'tool_use', tool })
             }
           }
-          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning)
+          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
         }
       } else if (c.type === 'content_block_delta') {
         const delta = c.delta as Record<string, unknown> | undefined
         if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
           buf.text += delta.text
-          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning)
+          appendBlock('text', delta.text)
+          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
         } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
           buf.reasoning += delta.thinking
-          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning)
+          appendBlock('thinking', delta.thinking)
+          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
         }
       } else if (c.type === 'result') {
         const duration = Date.now() - buf.startedAt
         if (typeof c.result === 'string') {
           buf.text = c.result as string
+          // Rebuild contentBlocks for result override — result replaces all text
+          buf.contentBlocks = buf.contentBlocks.filter(b => b.type !== 'text')
+          buf.contentBlocks.push({ type: 'text', text: buf.text })
         }
-        updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, duration)
+        updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
 
         // Auto-capture plan content when in plan mode
         if (buf.permissionMode === 'plan' && buf.text.trim()) {
@@ -504,7 +574,7 @@ function App(): JSX.Element {
         // Save final text for notification before buffer is deleted
         finalTexts.current.set(conversationId, buf.text)
         // Persist final assistant message to DB
-        window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration)
+        window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration, JSON.stringify(buf.contentBlocks))
         buffers.current.delete(conversationId)
       }
     })
@@ -513,7 +583,8 @@ function App(): JSX.Element {
       const buf = buffers.current.get(conversationId)
       if (!buf) return
       buf.text += `\n[Error: ${error}]`
-      updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning)
+      buf.contentBlocks.push({ type: 'text', text: `\n[Error: ${error}]` })
+      updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
       if (error.toLowerCase().includes('permission') || error.toLowerCase().includes('denied')) {
         setPermissionDenied(true)
         setDeniedCount((prev) => prev + 1)
@@ -530,8 +601,8 @@ function App(): JSX.Element {
       // Persist any remaining buffer content
       if (buf) {
         const duration = Date.now() - buf.startedAt
-        updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, duration)
-        window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration)
+        updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
+        window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration, JSON.stringify(buf.contentBlocks))
         buffers.current.delete(conversationId)
       }
       setLoadingConvs((prev) => {
@@ -621,8 +692,8 @@ function App(): JSX.Element {
       const buf = buffers.current.get(activeConversationId)
       if (buf) {
         const duration = Date.now() - buf.startedAt
-        updateLastAssistantMessage(activeConversationId, buf.text, buf.tools, buf.reasoning, duration)
-        window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration)
+        updateLastAssistantMessage(activeConversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
+        window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration, JSON.stringify(buf.contentBlocks))
         buffers.current.delete(activeConversationId)
       }
     }
@@ -723,7 +794,7 @@ function App(): JSX.Element {
   }, [activeProject])
 
   const handleOpenInTerminal = useCallback(() => {
-    if (activeProject) window.api.openInTerminal(activeProject.path)
+    if (activeProject) setTerminalOpen((prev) => !prev)
   }, [activeProject])
 
   const handleExecutePlan = useCallback((plan: string) => {
@@ -748,6 +819,18 @@ function App(): JSX.Element {
       : `Please look at these files:\n${paths}`
     handleSend(text)
   }, [activeProject, handleSend])
+
+  // Keyboard shortcut: Ctrl+` or Cmd+` to toggle terminal
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === '`' && (e.ctrlKey || e.metaKey) && activeProject) {
+        e.preventDefault()
+        setTerminalOpen((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [activeProject])
 
   return (
     <SidebarProvider className="bg-td-bg text-td-text">
@@ -788,11 +871,23 @@ function App(): JSX.Element {
           <>
             <div className="flex flex-1 min-h-0">
               <div className="flex flex-1 flex-col min-w-0">
-                <ChatArea
-                  messages={activeConversation?.messages || []}
-                  isLoading={isLoading}
-                  permissionMode={permissionMode}
-                />
+                <div className="flex-1 flex flex-col min-h-0">
+                  <ChatArea
+                    messages={activeConversation?.messages || []}
+                    isLoading={isLoading}
+                    permissionMode={permissionMode}
+                  />
+                </div>
+                {terminalOpen && (
+                  <>
+                    <ResizeHandle onResize={setTerminalPanelHeight} />
+                    <TerminalPanel
+                      cwd={activeProject.path}
+                      height={terminalPanelHeight}
+                      onClose={() => setTerminalOpen(false)}
+                    />
+                  </>
+                )}
               </div>
               {planSidebarOpen && (
                 <PlanSidebar
@@ -852,6 +947,9 @@ function App(): JSX.Element {
               onEffortChange={setEffortLevel}
               permissionMode={permissionMode}
               onPermissionModeChange={setPermissionMode}
+              onArchiveConversation={() => {
+                if (activeConversationId) handleArchiveConversation(activeConversationId, true)
+              }}
               disabledTools={disabledTools}
               onToggleTool={(tool) => setDisabledTools((prev) => {
                 const next = new Set(prev)
@@ -859,6 +957,8 @@ function App(): JSX.Element {
                 else next.add(tool)
                 return next
               })}
+              useWorktree={useWorktree}
+              onUseWorktreeChange={setUseWorktree}
             />
           </>
         ) : (

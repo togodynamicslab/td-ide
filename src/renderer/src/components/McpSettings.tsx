@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Switch } from './ui/switch'
-import { Plus, Trash2, Eye, EyeOff, Search, Globe, ChevronDown, ChevronRight, X } from 'lucide-react'
+import { Plus, Trash2, Eye, EyeOff, Search, Globe, ChevronDown, ChevronRight, X, Info } from 'lucide-react'
 import type { Project } from '../App'
 
 interface McpServerConfig {
@@ -33,7 +33,8 @@ function McpSettings({ project }: { project: Project | undefined }): JSX.Element
   const [customArgs, setCustomArgs] = useState('')
   const [customEnvPairs, setCustomEnvPairs] = useState<{ key: string; value: string }[]>([])
   const [revealedSecrets, setRevealedSecrets] = useState<Set<string>>(new Set())
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set(['marketplace']))
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set())
 
   const loadServers = useCallback(async () => {
     if (!project) return
@@ -103,11 +104,11 @@ function McpSettings({ project }: { project: Project | undefined }): JSX.Element
   )
 
   // --- Handlers ---
-  const toggleSection = (section: string) => {
-    setCollapsedSections((prev) => {
+  const toggleSetItem = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) => {
+    setter((prev) => {
       const next = new Set(prev)
-      if (next.has(section)) next.delete(section)
-      else next.add(section)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }
@@ -172,19 +173,56 @@ function McpSettings({ project }: { project: Project | undefined }): JSX.Element
     setShowCustomForm(false)
   }
 
-  const toggleSecret = (key: string) => {
-    setRevealedSecrets((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
+  const marketplaceActiveCount = filteredMarketplace.filter(p => p.id in installed).length
+  const globalActiveCount = filteredGlobal.filter(([name]) => name in installed).length
+
+  const CompactServerRow = ({ id, name, icon, isInstalled, isExpanded, onToggle, onToggleDetails, details }: {
+    id: string
+    name: string
+    icon: React.ReactNode
+    isInstalled: boolean
+    isExpanded: boolean
+    onToggle: () => void
+    onToggleDetails: () => void
+    details: React.ReactNode
+  }) => (
+    <div
+      key={id}
+      className={`transition-colors duration-150 ${
+        isInstalled ? 'bg-td-accent/[0.03]' : 'bg-td-surface/10 hover:bg-td-surface/20'
+      }`}
+    >
+      <div className="flex items-center gap-3 px-3.5 py-2.5">
+        {icon}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-medium text-td-text truncate">{name}</span>
+            {isInstalled && (
+              <span className="text-[9px] px-1.5 py-px rounded-full bg-emerald-500/10 text-emerald-400 font-medium leading-tight">
+                Active
+              </span>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={onToggleDetails}
+          className="h-6 w-6 rounded-md flex items-center justify-center text-td-muted/50 hover:text-td-muted hover:bg-td-surface transition-colors shrink-0"
+          title="Show details"
+        >
+          <Info className="h-3 w-3" />
+        </button>
+        <Switch checked={isInstalled} onCheckedChange={onToggle} className="shrink-0" />
+      </div>
+      {isExpanded && (
+        <div className="px-3.5 pb-2.5 pl-[3.25rem]">{details}</div>
+      )}
+    </div>
+  )
 
   // --- Section header component ---
-  const SectionHeader = ({ id, title, count, subtitle }: { id: string; title: string; count: number; subtitle?: string }) => (
+  const SectionHeader = ({ id, title, count, activeCount, subtitle }: { id: string; title: string; count: number; activeCount?: number; subtitle?: string }) => (
     <button
-      onClick={() => toggleSection(id)}
+      onClick={() => toggleSetItem(setCollapsedSections, id)}
       className="flex items-center gap-2.5 w-full mb-3 group"
     >
       {collapsedSections.has(id) ? (
@@ -194,7 +232,7 @@ function McpSettings({ project }: { project: Project | undefined }): JSX.Element
       )}
       <span className="text-[11px] font-semibold text-td-muted uppercase tracking-wider">{title}</span>
       <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-td-surface text-td-muted font-medium tabular-nums">
-        {count}
+        {activeCount !== undefined ? `${activeCount} / ${count}` : count}
       </span>
       <div className="flex-1 h-px bg-td-border/40" />
       {subtitle && (
@@ -230,53 +268,37 @@ function McpSettings({ project }: { project: Project | undefined }): JSX.Element
       {/* ───── Marketplace Plugins ───── */}
       {filteredMarketplace.length > 0 && (
         <section>
-          <SectionHeader id="marketplace" title="Marketplace" count={filteredMarketplace.length} subtitle="Claude plugins" />
+          <SectionHeader id="marketplace" title="Marketplace" count={filteredMarketplace.length} activeCount={marketplaceActiveCount} subtitle="Claude plugins" />
 
           {!collapsedSections.has('marketplace') && (
-            <div className="space-y-2">
-              {filteredMarketplace.map((plugin) => {
-                const isInstalled = plugin.id in installed
-                return (
-                  <div
+            <div className="max-h-[420px] overflow-y-auto rounded-xl border border-td-border/30">
+              <div className="divide-y divide-td-border/30">
+                {filteredMarketplace.map((plugin) => (
+                  <CompactServerRow
                     key={plugin.id}
-                    className={`rounded-xl border transition-all duration-200 ${
-                      isInstalled
-                        ? 'border-td-accent/20 bg-td-accent/[0.03]'
-                        : 'border-td-border/50 bg-td-surface/20 hover:bg-td-surface/30'
-                    }`}
-                  >
-                    <div className="flex items-start gap-3 p-4">
-                      <div className="h-8 w-8 rounded-lg bg-violet-500/10 flex items-center justify-center shrink-0">
-                        <span className="text-xs font-bold text-violet-400">{plugin.name[0]?.toUpperCase()}</span>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium text-td-text">{plugin.name}</span>
-                          {plugin.author && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-td-surface text-td-muted font-medium">
-                              {plugin.author}
-                            </span>
-                          )}
-                          {isInstalled && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-medium">
-                              Active
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-td-muted mt-1 leading-relaxed line-clamp-2">{plugin.description}</p>
-                        <p className="text-[10px] text-td-muted/50 mt-1.5 font-mono truncate">
+                    id={plugin.id}
+                    name={plugin.name}
+                    icon={<div className="h-7 w-7 rounded-md bg-violet-500/10 flex items-center justify-center shrink-0"><span className="text-[10px] font-bold text-violet-400">{plugin.name[0]?.toUpperCase()}</span></div>}
+                    isInstalled={plugin.id in installed}
+                    isExpanded={expandedCards.has(`mp-${plugin.id}`)}
+                    onToggle={() => handleToggleMarketplace(plugin)}
+                    onToggleDetails={() => toggleSetItem(setExpandedCards, `mp-${plugin.id}`)}
+                    details={
+                      <>
+                        <p className="text-[11px] text-td-muted leading-relaxed">{plugin.description}</p>
+                        {plugin.author && (
+                          <p className="text-[10px] text-td-muted/60 mt-1">
+                            by <span className="text-td-muted/80">{plugin.author}</span>
+                          </p>
+                        )}
+                        <p className="text-[10px] text-td-muted/40 mt-1 font-mono truncate">
                           {formatConfig(plugin.config)}
                         </p>
-                      </div>
-                      <Switch
-                        checked={isInstalled}
-                        onCheckedChange={() => handleToggleMarketplace(plugin)}
-                        className="shrink-0 mt-0.5"
-                      />
-                    </div>
-                  </div>
-                )
-              })}
+                      </>
+                    }
+                  />
+                ))}
+              </div>
             </div>
           )}
         </section>
@@ -285,50 +307,29 @@ function McpSettings({ project }: { project: Project | undefined }): JSX.Element
       {/* ───── Global MCPs ───── */}
       {filteredGlobal.length > 0 && (
         <section>
-          <SectionHeader id="global" title="Global" count={filteredGlobal.length} subtitle="~/.claude/settings.json" />
+          <SectionHeader id="global" title="Global" count={filteredGlobal.length} activeCount={globalActiveCount} subtitle="~/.claude/settings.json" />
 
           {!collapsedSections.has('global') && (
-            <div className="space-y-2">
-              {filteredGlobal.map(([name, config]) => {
-                const isInstalled = name in installed
-                return (
-                  <div
+            <div className="max-h-[420px] overflow-y-auto rounded-xl border border-td-border/30">
+              <div className="divide-y divide-td-border/30">
+                {filteredGlobal.map(([name, config]) => (
+                  <CompactServerRow
                     key={name}
-                    className={`rounded-xl border transition-all duration-200 ${
-                      isInstalled
-                        ? 'border-td-accent/20 bg-td-accent/[0.03]'
-                        : 'border-td-border/50 bg-td-surface/20 hover:bg-td-surface/30'
-                    }`}
-                  >
-                    <div className="flex items-start gap-3 p-4">
-                      <div className="h-8 w-8 rounded-lg bg-td-surface flex items-center justify-center shrink-0">
-                        <Globe className="h-4 w-4 text-td-muted" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-td-text">{name}</span>
-                          {isInstalled && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-medium">
-                              Active
-                            </span>
-                          )}
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-td-surface text-td-muted font-medium">
-                            Global
-                          </span>
-                        </div>
-                        <p className="text-xs text-td-muted mt-1 font-mono truncate">
-                          {formatConfig(config)}
-                        </p>
-                      </div>
-                      <Switch
-                        checked={isInstalled}
-                        onCheckedChange={() => handleToggleGlobal(name, config)}
-                        className="shrink-0 mt-0.5"
-                      />
-                    </div>
-                  </div>
-                )
-              })}
+                    id={name}
+                    name={name}
+                    icon={<div className="h-7 w-7 rounded-md bg-td-surface flex items-center justify-center shrink-0"><Globe className="h-3.5 w-3.5 text-td-muted" /></div>}
+                    isInstalled={name in installed}
+                    isExpanded={expandedCards.has(`gl-${name}`)}
+                    onToggle={() => handleToggleGlobal(name, config)}
+                    onToggleDetails={() => toggleSetItem(setExpandedCards, `gl-${name}`)}
+                    details={
+                      <p className="text-[10px] text-td-muted/60 font-mono truncate">
+                        {formatConfig(config)}
+                      </p>
+                    }
+                  />
+                ))}
+              </div>
             </div>
           )}
         </section>

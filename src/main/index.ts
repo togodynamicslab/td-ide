@@ -3,6 +3,7 @@ import { join } from 'path'
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { spawn, ChildProcess, execSync } from 'child_process'
+import * as pty from 'node-pty'
 import { getMcpServers, getGlobalMcpServers, getMarketplacePlugins, setMcpServer, removeMcpServer } from './mcp'
 import {
   initDatabase,
@@ -18,16 +19,28 @@ import {
   updateConversationSessionId,
   setConversationArchived,
   isConversationTitleEdited,
+  setConversationWorktreePath,
+  getConversationWorktreePath,
   deleteConversation,
   getMessagesByConversation,
   insertMessage,
-  updateMessage
+  updateMessage,
+  getAppState,
+  setAppState,
+  getAllAppState,
+  registerActiveProcess,
+  removeActiveProcess,
+  getAllActiveProcesses,
+  clearAllActiveProcesses
 } from './db'
 
 let mainWindow: BrowserWindow | null = null
 
 // Parallel claude processes — one per conversation
 const claudeProcesses = new Map<string, ChildProcess>()
+
+// Terminal PTY processes — one per terminal tab
+const ptyProcesses = new Map<string, pty.IPty>()
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -38,7 +51,6 @@ function createWindow(): void {
     title: 'td-ide',
     backgroundColor: '#0f0f17',
     frame: false,
-    titleBarStyle: 'hidden',
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -127,6 +139,15 @@ ipcMain.handle('db:rename-conversation', (_event, { id, title, titleEdited }: { 
 ipcMain.handle('db:archive-conversation', (_event, { id, archived }: { id: string; archived: boolean }) => {
   setConversationArchived(id, archived)
   return true
+})
+
+ipcMain.handle('db:set-conversation-worktree', (_event, { id, worktreePath }: { id: string; worktreePath: string | null }) => {
+  setConversationWorktreePath(id, worktreePath)
+  return true
+})
+
+ipcMain.handle('db:get-conversation-worktree', (_event, { id }: { id: string }) => {
+  return getConversationWorktreePath(id)
 })
 
 ipcMain.handle('db:delete-conversation', (_event, { id }: { id: string }) => {
@@ -241,17 +262,17 @@ ipcMain.handle('db:get-messages', (_event, { conversationId }: { conversationId:
   return getMessagesByConversation(conversationId)
 })
 
-ipcMain.handle('db:add-message', (_event, { id, conversationId, role, content, tools, reasoning, images }: {
-  id: string; conversationId: string; role: 'user' | 'assistant'; content: string; tools: string; reasoning: string; images: string
+ipcMain.handle('db:add-message', (_event, { id, conversationId, role, content, tools, reasoning, images, contentBlocks }: {
+  id: string; conversationId: string; role: 'user' | 'assistant'; content: string; tools: string; reasoning: string; images: string; contentBlocks?: string
 }) => {
-  insertMessage(id, conversationId, role, content, tools, reasoning, images)
+  insertMessage(id, conversationId, role, content, tools, reasoning, images, contentBlocks)
   return true
 })
 
-ipcMain.handle('db:update-message', (_event, { id, content, tools, reasoning, duration }: {
-  id: string; content: string; tools: string; reasoning: string; duration?: number
+ipcMain.handle('db:update-message', (_event, { id, content, tools, reasoning, duration, contentBlocks }: {
+  id: string; content: string; tools: string; reasoning: string; duration?: number; contentBlocks?: string
 }) => {
-  updateMessage(id, content, tools, reasoning, duration)
+  updateMessage(id, content, tools, reasoning, duration, contentBlocks)
   return true
 })
 
@@ -471,6 +492,58 @@ ipcMain.handle('dialog:openFile', async (_event, { cwd }: { cwd: string }) => {
   return result.filePaths
 })
 
+// --- App State persistence ---
+
+ipcMain.handle('state:get', (_event, { key }: { key: string }) => {
+  return getAppState(key)
+})
+
+ipcMain.handle('state:set', (_event, { key, value }: { key: string; value: string }) => {
+  setAppState(key, value)
+  return true
+})
+
+ipcMain.handle('state:get-all', () => {
+  return getAllAppState()
+})
+
+// --- Active process tracking ---
+
+ipcMain.handle('process:get-interrupted', () => {
+  // Return conversations that were running when the app last closed
+  const processes = getAllActiveProcesses()
+  // Check if any PIDs are still alive
+  const results: { conversationId: string; pid: number; startedAt: number; alive: boolean }[] = []
+  for (const proc of processes) {
+    let alive = false
+    try {
+      // Sending signal 0 checks if process exists without killing it
+      process.kill(proc.pid, 0)
+      alive = true
+    } catch {
+      alive = false
+    }
+    results.push({
+      conversationId: proc.conversationId,
+      pid: proc.pid,
+      startedAt: proc.startedAt instanceof Date ? proc.startedAt.getTime() : Number(proc.startedAt),
+      alive
+    })
+  }
+  // Clear the table — these are from a previous session
+  clearAllActiveProcesses()
+  return results
+})
+
+ipcMain.handle('process:kill-orphan', (_event, { pid }: { pid: number }) => {
+  try {
+    process.kill(pid, 'SIGTERM')
+    return { success: true }
+  } catch {
+    return { success: false }
+  }
+})
+
 // --- Claude process management (parallel) ---
 
 const PERMISSION_MAP: Record<string, string> = {
@@ -508,6 +581,11 @@ function launchClaude(message: string, conversationId: string, cwd: string, mode
   })
 
   claudeProcesses.set(conversationId, proc)
+
+  // Track PID for session recovery
+  if (proc.pid) {
+    registerActiveProcess(conversationId, proc.pid)
+  }
 
   proc.stdin?.write(message)
   proc.stdin?.end()
@@ -558,12 +636,14 @@ function launchClaude(message: string, conversationId: string, cwd: string, mode
     console.log('[td-ide] closed | conv:', conversationId, '| code:', code)
     sendToRenderer('claude:done', { conversationId, code })
     claudeProcesses.delete(conversationId)
+    removeActiveProcess(conversationId)
   })
 
   proc.on('error', (err) => {
     sendToRenderer('claude:error', { conversationId, error: `Failed to start claude: ${err.message}` })
     sendToRenderer('claude:done', { conversationId, code: 1 })
     claudeProcesses.delete(conversationId)
+    removeActiveProcess(conversationId)
   })
 }
 
@@ -584,8 +664,69 @@ ipcMain.on('claude:cancel', (_event, { conversationId }) => {
   if (proc) {
     proc.kill()
     claudeProcesses.delete(conversationId)
+    removeActiveProcess(conversationId)
     sendToRenderer('claude:done', { conversationId, code: -1, cancelled: true })
   }
+})
+
+// --- Terminal PTY handlers ---
+
+function getDefaultShell(): string {
+  if (process.platform === 'win32') return process.env.COMSPEC || 'cmd.exe'
+  return process.env.SHELL || '/bin/zsh'
+}
+
+ipcMain.handle('terminal:create', (_event, { id, cwd, shell: shellPath }: { id: string; cwd: string; shell?: string }) => {
+  try {
+    const ptyProcess = pty.spawn(shellPath || getDefaultShell(), [], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: cwd || app.getPath('home'),
+      env: { ...process.env } as Record<string, string>
+    })
+
+    ptyProcesses.set(id, ptyProcess)
+
+    ptyProcess.onData((data) => {
+      sendToRenderer('terminal:data', { id, data })
+    })
+
+    ptyProcess.onExit(({ exitCode }) => {
+      sendToRenderer('terminal:exit', { id, exitCode })
+      ptyProcesses.delete(id)
+    })
+
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: String((err as Error).message || err) }
+  }
+})
+
+ipcMain.on('terminal:input', (_event, { id, data }: { id: string; data: string }) => {
+  const ptyProcess = ptyProcesses.get(id)
+  if (ptyProcess) ptyProcess.write(data)
+})
+
+ipcMain.handle('terminal:resize', (_event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
+  const ptyProcess = ptyProcesses.get(id)
+  if (ptyProcess) {
+    try {
+      ptyProcess.resize(cols, rows)
+    } catch {
+      // ignore resize errors (e.g. process already exited)
+    }
+  }
+  return { success: true }
+})
+
+ipcMain.handle('terminal:close', (_event, { id }: { id: string }) => {
+  const ptyProcess = ptyProcesses.get(id)
+  if (ptyProcess) {
+    ptyProcess.kill()
+    ptyProcesses.delete(id)
+  }
+  return { success: true }
 })
 
 // --- App lifecycle ---
@@ -611,6 +752,11 @@ app.on('window-all-closed', () => {
     proc.kill()
   }
   claudeProcesses.clear()
+  // Kill all terminal PTY processes
+  for (const [, proc] of ptyProcesses) {
+    proc.kill()
+  }
+  ptyProcesses.clear()
   closeDatabase()
   if (process.platform !== 'darwin') {
     app.quit()

@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import * as schema from './schema'
 
 let db: ReturnType<typeof drizzle>
@@ -63,6 +63,33 @@ export function initDatabase(): void {
   } catch {
     // Column already exists
   }
+
+  // Migration: add worktree_path column to conversations
+  try {
+    sqlite.exec(`ALTER TABLE conversations ADD COLUMN worktree_path TEXT`)
+  } catch {
+    // Column already exists
+  }
+
+  // Migration: add content_blocks column to messages for chronological rendering
+  try {
+    sqlite.exec(`ALTER TABLE messages ADD COLUMN content_blocks TEXT NOT NULL DEFAULT '[]'`)
+  } catch {
+    // Column already exists
+  }
+
+  // Session recovery tables
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS app_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS active_processes (
+      conversation_id TEXT PRIMARY KEY,
+      pid INTEGER NOT NULL,
+      started_at INTEGER NOT NULL
+    );
+  `)
 }
 
 export function closeDatabase(): void {
@@ -146,6 +173,23 @@ export function setConversationArchived(id: string, archived: boolean) {
     .run()
 }
 
+export function setConversationWorktreePath(id: string, worktreePath: string | null) {
+  return db
+    .update(schema.conversations)
+    .set({ worktreePath })
+    .where(eq(schema.conversations.id, id))
+    .run()
+}
+
+export function getConversationWorktreePath(id: string): string | null {
+  const row = db
+    .select({ worktreePath: schema.conversations.worktreePath })
+    .from(schema.conversations)
+    .where(eq(schema.conversations.id, id))
+    .get()
+  return row?.worktreePath ?? null
+}
+
 export function deleteConversation(id: string) {
   return db.delete(schema.conversations).where(eq(schema.conversations.id, id)).run()
 }
@@ -167,11 +211,12 @@ export function insertMessage(
   content: string,
   tools: string,
   reasoning: string,
-  images: string
+  images: string,
+  contentBlocks = '[]'
 ) {
   return db
     .insert(schema.messages)
-    .values({ id, conversationId, role, content, tools, reasoning, images, createdAt: new Date() })
+    .values({ id, conversationId, role, content, tools, reasoning, images, contentBlocks, createdAt: new Date() })
     .run()
 }
 
@@ -180,11 +225,63 @@ export function updateMessage(
   content: string,
   tools: string,
   reasoning: string,
-  duration?: number
+  duration?: number,
+  contentBlocks = '[]'
 ) {
   return db
     .update(schema.messages)
-    .set({ content, tools, reasoning, ...(duration != null ? { duration } : {}) })
+    .set({ content, tools, reasoning, contentBlocks, ...(duration != null ? { duration } : {}) })
     .where(eq(schema.messages.id, id))
     .run()
+}
+
+// --- App State (key-value persistence) ---
+
+export function getAppState(key: string): string | null {
+  const row = db
+    .select({ value: schema.appState.value })
+    .from(schema.appState)
+    .where(eq(schema.appState.key, key))
+    .get()
+  return row?.value ?? null
+}
+
+export function setAppState(key: string, value: string) {
+  // upsert
+  sqlite.exec(
+    `INSERT INTO app_state (key, value) VALUES ('${key.replace(/'/g, "''")}', '${value.replace(/'/g, "''")}')
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  )
+}
+
+export function getAllAppState(): Record<string, string> {
+  const rows = db.select().from(schema.appState).all()
+  const result: Record<string, string> = {}
+  for (const row of rows) result[row.key] = row.value
+  return result
+}
+
+export function deleteAppState(key: string) {
+  return db.delete(schema.appState).where(eq(schema.appState.key, key)).run()
+}
+
+// --- Active Processes (track running Claude PIDs) ---
+
+export function registerActiveProcess(conversationId: string, pid: number) {
+  sqlite.exec(
+    `INSERT INTO active_processes (conversation_id, pid, started_at) VALUES ('${conversationId}', ${pid}, ${Date.now()})
+     ON CONFLICT(conversation_id) DO UPDATE SET pid = excluded.pid, started_at = excluded.started_at`
+  )
+}
+
+export function removeActiveProcess(conversationId: string) {
+  return db.delete(schema.activeProcesses).where(eq(schema.activeProcesses.conversationId, conversationId)).run()
+}
+
+export function getAllActiveProcesses() {
+  return db.select().from(schema.activeProcesses).all()
+}
+
+export function clearAllActiveProcesses() {
+  return sqlite.exec('DELETE FROM active_processes')
 }

@@ -38,6 +38,14 @@ interface ClaudeAPI {
   openInTerminal: (cwd: string) => Promise<boolean>
   executeCommand: (command: string, cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>
 
+  // Terminal
+  terminalCreate: (id: string, cwd: string, shell?: string) => Promise<{ success: boolean; error?: string }>
+  terminalInput: (id: string, data: string) => void
+  terminalResize: (id: string, cols: number, rows: number) => Promise<{ success: boolean }>
+  terminalClose: (id: string) => Promise<{ success: boolean }>
+  onTerminalData: (callback: (id: string, data: string) => void) => () => void
+  onTerminalExit: (callback: (id: string, exitCode: number) => void) => () => void
+
   // DB — Projects
   getProjects: () => Promise<unknown[]>
   addProject: (id: string, name: string, path: string) => Promise<boolean>
@@ -50,16 +58,25 @@ interface ClaudeAPI {
   renameConversation: (id: string, title: string, titleEdited?: boolean) => Promise<boolean>
   archiveConversation: (id: string, archived: boolean) => Promise<boolean>
   generateTitle: (conversationId: string, userMessage: string) => Promise<string | null>
+  setConversationWorktree: (id: string, worktreePath: string | null) => Promise<boolean>
+  getConversationWorktree: (id: string) => Promise<string | null>
   deleteConversation: (id: string) => Promise<boolean>
 
   // DB — Messages
   getMessages: (conversationId: string) => Promise<unknown[]>
-  addMessage: (id: string, conversationId: string, role: 'user' | 'assistant', content: string, tools: string, reasoning: string, images: string) => Promise<boolean>
-  updateMessage: (id: string, content: string, tools: string, reasoning: string, duration?: number) => Promise<boolean>
+  addMessage: (id: string, conversationId: string, role: 'user' | 'assistant', content: string, tools: string, reasoning: string, images: string, contentBlocks?: string) => Promise<boolean>
+  updateMessage: (id: string, content: string, tools: string, reasoning: string, duration?: number, contentBlocks?: string) => Promise<boolean>
 
   // Notifications
   showNotification: (title: string, body: string) => Promise<boolean>
   generateNotificationSummary: (assistantText: string, conversationTitle: string) => Promise<string | null>
+
+  // App State (session recovery)
+  getAppState: (key: string) => Promise<string | null>
+  setAppState: (key: string, value: string) => Promise<boolean>
+  getAllAppState: () => Promise<Record<string, string>>
+  getInterruptedProcesses: () => Promise<{ conversationId: string; pid: number; startedAt: number; alive: boolean }[]>
+  killOrphanProcess: (pid: number) => Promise<{ success: boolean }>
 
   // Stream listeners
   onStream: (callback: (conversationId: string, data: unknown) => void) => () => void

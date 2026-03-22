@@ -6,7 +6,7 @@ import {
   MessageSquarePlus, Eraser, HelpCircle, Hash, Sun,
   Moon, Settings, FileCode, Minimize2, FolderOpen,
   Terminal, Zap, Info, Check, Timer, RefreshCw,
-  Code2, Bug, Keyboard, BookOpen
+  Code2, Bug, Keyboard, BookOpen, Archive, GitFork
 } from 'lucide-react'
 import { Button } from './ui/button'
 import {
@@ -38,6 +38,9 @@ interface InputBarProps {
   onPermissionModeChange: (mode: PermissionMode) => void
   disabledTools: Set<string>
   onToggleTool: (tool: string) => void
+  onArchiveConversation: () => void
+  useWorktree: boolean
+  onUseWorktreeChange: (value: boolean) => void
 }
 
 // --- Slash command definitions ---
@@ -105,7 +108,8 @@ function InputBar({
   onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile,
   isLoading, queueLength, selectedModel, onModelChange,
   effortLevel, onEffortChange, permissionMode, onPermissionModeChange,
-  disabledTools, onToggleTool
+  disabledTools, onToggleTool, onArchiveConversation,
+  useWorktree, onUseWorktreeChange
 }: InputBarProps): JSX.Element {
   const [text, setText] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
@@ -143,6 +147,13 @@ function InputBar({
       icon: <Minimize2 className="h-3.5 w-3.5 text-purple-400" />,
       category: 'chat' as SlashCategory,
       action: () => onSend('/compact — Please provide a concise summary of our conversation so far, then we can continue from that summary.')
+    },
+    {
+      name: 'archive',
+      description: 'Archive current conversation',
+      icon: <Archive className="h-3.5 w-3.5 text-amber-400" />,
+      category: 'chat' as SlashCategory,
+      action: () => onArchiveConversation()
     },
 
     // ── Config ──
@@ -314,7 +325,7 @@ function InputBar({
       category: 'info' as SlashCategory,
       action: () => {} // just shows the menu
     },
-  ], [onModelChange, onEffortChange, onPermissionModeChange, onNewChat, onClearConversation, onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile, onSend, selectedModel, effortLevel, permissionMode, disabledTools])
+  ], [onModelChange, onEffortChange, onPermissionModeChange, onNewChat, onClearConversation, onArchiveConversation, onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile, onSend, selectedModel, effortLevel, permissionMode, disabledTools])
 
   // Parse slash input
   const slashParse = useMemo(() => {
@@ -798,6 +809,33 @@ function InputBar({
                       )}
                     </DropdownMenuContent>
                   </DropdownMenu>
+
+                  {/* Worktree toggle (only for new chats) */}
+                  {!conversationId && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              'h-7 text-xs gap-1 font-medium px-2 transition-colors',
+                              useWorktree
+                                ? 'text-purple-400 hover:text-purple-300 hover:bg-purple-500/10'
+                                : 'text-td-muted hover:text-td-text'
+                            )}
+                            onClick={() => onUseWorktreeChange(!useWorktree)}
+                          >
+                            <GitFork className="h-3 w-3" />
+                            <span className="hidden sm:inline">Worktree</span>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top">
+                          {useWorktree ? 'Chat will run in a new git worktree' : 'Click to use a git worktree for this chat'}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
 
                   {/* Queue indicator */}
                   {queueLength > 0 && (
