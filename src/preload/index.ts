@@ -157,11 +157,16 @@ const api = {
   },
 
   // Notifications
-  showNotification: (title: string, body: string): Promise<boolean> => {
-    return ipcRenderer.invoke('notify:show', { title, body })
+  showNotification: (title: string, body: string, conversationId?: string): Promise<boolean> => {
+    return ipcRenderer.invoke('notify:show', { title, body, conversationId })
   },
   generateNotificationSummary: (assistantText: string, conversationTitle: string): Promise<string | null> => {
     return ipcRenderer.invoke('notify:generate-summary', { assistantText, conversationTitle })
+  },
+  onNotificationNavigate: (callback: (data: { conversationId: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { conversationId: string }): void => callback(data)
+    ipcRenderer.on('notify:navigate', handler)
+    return () => { ipcRenderer.removeListener('notify:navigate', handler) }
   },
 
   // Terminal

@@ -108,6 +108,8 @@ function App(): JSX.Element {
   const [projects, setProjects] = useState<Project[]>([])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
+  const activeConversationIdRef = useRef<string | null>(null)
+  useEffect(() => { activeConversationIdRef.current = activeConversationId }, [activeConversationId])
   const [loadingConvs, setLoadingConvs] = useState<Set<string>>(new Set())
   const [recentlyRetitled, setRecentlyRetitled] = useState<Set<string>>(new Set())
   const [selectedModel, setSelectedModel] = useState<ModelId>('opus')
@@ -151,6 +153,8 @@ function App(): JSX.Element {
   const planDrafts = useRef(new Map<string, string>())
   // Per-conversation stream buffers for parallel support
   const buffers = useRef(new Map<string, StreamBuffer>())
+  const projectsRef = useRef(projects)
+  useEffect(() => { projectsRef.current = projects }, [projects])
   // Track last user message per conversation for title generation
   const lastUserMessages = useRef(new Map<string, string>())
 
@@ -890,8 +894,8 @@ function App(): JSX.Element {
         })
       }
 
-      // Send desktop notification only when the window is not focused
-      if (assistantText && document.hidden) {
+      // Send desktop notification when conversation finishes in the background
+      if (assistantText && (document.hidden || conversationId !== activeConversationIdRef.current)) {
         setProjects((prev) => {
           let convTitle = 'Chat'
           for (const p of prev) {
@@ -901,11 +905,11 @@ function App(): JSX.Element {
           window.api.generateNotificationSummary(assistantText, convTitle)
             .then((summary) => {
               const body = summary || assistantText.slice(0, 120).replace(/\n/g, ' ')
-              window.api.showNotification(`td-ide — ${convTitle}`, body)
+              window.api.showNotification(`td-ide — ${convTitle}`, body, conversationId)
             })
             .catch(() => {
               const body = assistantText.slice(0, 120).replace(/\n/g, ' ')
-              window.api.showNotification(`td-ide — ${convTitle}`, body)
+              window.api.showNotification(`td-ide — ${convTitle}`, body, conversationId)
             })
           return prev
         })
@@ -963,6 +967,26 @@ function App(): JSX.Element {
       }
       setPendingApprovals((prev) => [...prev, newDenial])
       setApprovalConvId(data.conversationId)
+      // Auto-navigate to the conversation requesting permission
+      if (data.conversationId) {
+        setActiveConversationId(data.conversationId)
+        const ownerProject = projectsRef.current.find((p) =>
+          p.conversations.some((c) => c.id === data.conversationId)
+        )
+        if (ownerProject) setActiveProjectId(ownerProject.id)
+      }
+    })
+    return unsub
+  }, [])
+
+  // Navigate to conversation when notification is clicked
+  useEffect(() => {
+    const unsub = window.api.onNotificationNavigate(({ conversationId }) => {
+      setActiveConversationId(conversationId)
+      const ownerProject = projectsRef.current.find((p) =>
+        p.conversations.some((c) => c.id === conversationId)
+      )
+      if (ownerProject) setActiveProjectId(ownerProject.id)
     })
     return unsub
   }, [])

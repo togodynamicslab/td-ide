@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react'
-import { Plus, FolderOpen, GitBranch, ChevronDown, Map, Terminal, FilePlus, Loader2, Check, AlertCircle, Trash2, GitFork } from 'lucide-react'
+import { useState, useCallback, useMemo } from 'react'
+import { Plus, FolderOpen, GitBranch, ChevronDown, Map, Terminal, FilePlus, Loader2, Check, AlertCircle, Trash2, GitFork, Search } from 'lucide-react'
 import { Button } from './ui/button'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuItem,
@@ -44,6 +44,11 @@ function TopBar({
   const [newBranchName, setNewBranchName] = useState('')
   const [showNewBranch, setShowNewBranch] = useState(false)
   const [branchError, setBranchError] = useState('')
+  const [branchSearch, setBranchSearch] = useState('')
+  const filteredBranches = useMemo(() => {
+    const search = branchSearch.toLowerCase()
+    return search ? branches.filter((b) => b.name.toLowerCase().includes(search)) : branches
+  }, [branches, branchSearch])
 
   // Worktree state
   const [worktrees, setWorktrees] = useState<WorktreeInfo[]>([])
@@ -182,7 +187,7 @@ function TopBar({
 
         {/* Branch dropdown */}
         {gitBranch ? (
-          <DropdownMenu onOpenChange={(open) => { if (open) { loadBranches(); setShowNewBranch(false); setBranchError('') } }}>
+          <DropdownMenu onOpenChange={(open) => { if (open) { loadBranches(); setShowNewBranch(false); setBranchError(''); setBranchSearch('') } }}>
             <DropdownMenuTrigger asChild>
               <button className="text-[11px] h-5 px-2 rounded bg-td-surface text-emerald-400 shrink-0 inline-flex items-center gap-1 hover:bg-td-hover transition-colors cursor-pointer outline-none">
                 <GitBranch className="h-3 w-3" />
@@ -192,6 +197,19 @@ function TopBar({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-64">
               <DropdownMenuLabel>Branches</DropdownMenuLabel>
+              <div className="px-2 py-1.5">
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-td-muted" />
+                  <input
+                    autoFocus
+                    value={branchSearch}
+                    onChange={(e) => setBranchSearch(e.target.value)}
+                    placeholder="Search branches..."
+                    className="w-full bg-td-bg border border-td-border rounded pl-7 pr-2 py-1 text-xs text-td-text placeholder-td-muted outline-none focus:border-td-accent"
+                    onKeyDown={(e) => e.stopPropagation()}
+                  />
+                </div>
+              </div>
               <DropdownMenuSeparator />
               {branchLoading ? (
                 <div className="flex items-center justify-center py-3">
@@ -201,31 +219,37 @@ function TopBar({
                 <div className="px-2 py-3 text-xs text-td-muted text-center">
                   No branches yet. Create a commit first.
                 </div>
+              ) : filteredBranches.length === 0 ? (
+                <div className="px-2 py-3 text-xs text-td-muted text-center">
+                  No branches matching &quot;{branchSearch}&quot;
+                </div>
               ) : (
                 <DropdownMenuGroup>
-                  {branches.map((b) => (
-                    <DropdownMenuItem
-                      key={b.name}
-                      onClick={() => { if (!b.current) handleCheckout(b.name) }}
-                      className="flex items-center justify-between group/branch"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <GitBranch className="h-3 w-3 shrink-0" />
-                        <span className="truncate">{b.name}</span>
-                        {b.current && (
-                          <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                  <div className="max-h-60 overflow-y-auto">
+                    {filteredBranches.map((b) => (
+                      <DropdownMenuItem
+                        key={b.name}
+                        onClick={() => { if (!b.current) handleCheckout(b.name) }}
+                        className="flex items-center justify-between group/branch"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <GitBranch className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{b.name}</span>
+                          {b.current && (
+                            <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                          )}
+                        </div>
+                        {!b.current && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteBranch(b.name) }}
+                            className="opacity-0 group-hover/branch:opacity-100 p-0.5 hover:text-red-400 transition-opacity"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
                         )}
-                      </div>
-                      {!b.current && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDeleteBranch(b.name) }}
-                          className="opacity-0 group-hover/branch:opacity-100 p-0.5 hover:text-red-400 transition-opacity"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
-                      )}
-                    </DropdownMenuItem>
-                  ))}
+                      </DropdownMenuItem>
+                    ))}
+                  </div>
                 </DropdownMenuGroup>
               )}
               <DropdownMenuSeparator />

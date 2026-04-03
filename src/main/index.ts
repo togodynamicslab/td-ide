@@ -239,9 +239,20 @@ ipcMain.handle('db:generate-title', async (_event, { conversationId, userMessage
 
 // --- Notifications ---
 
-ipcMain.handle('notify:show', (_event, { title, body }: { title: string; body: string }) => {
+ipcMain.handle('notify:show', (_event, { title, body, conversationId }: { title: string; body: string; conversationId?: string }) => {
   if (Notification.isSupported()) {
-    new Notification({ title, body, silent: false }).show()
+    const notif = new Notification({ title, body, silent: false })
+    notif.on('click', () => {
+      const win = BrowserWindow.getAllWindows()[0]
+      if (win) {
+        if (win.isMinimized()) win.restore()
+        win.focus()
+        if (conversationId) {
+          win.webContents.send('notify:navigate', { conversationId })
+        }
+      }
+    })
+    notif.show()
   }
   return true
 })

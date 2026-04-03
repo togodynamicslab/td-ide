@@ -319,6 +319,7 @@ function AppSidebar({
                             <ContextMenu>
                               <ContextMenuTrigger asChild>
                                 <SidebarMenuSubButton
+                                  size="sm"
                                   isActive={conv.id === activeConversationId}
                                   onClick={() => {
                                     onSelectProject(project.id)

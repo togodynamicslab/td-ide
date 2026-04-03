@@ -77,8 +77,9 @@ interface ClaudeAPI {
   updateMessage: (id: string, content: string, tools: string, reasoning: string, duration?: number, contentBlocks?: string) => Promise<boolean>
 
   // Notifications
-  showNotification: (title: string, body: string) => Promise<boolean>
+  showNotification: (title: string, body: string, conversationId?: string) => Promise<boolean>
   generateNotificationSummary: (assistantText: string, conversationTitle: string) => Promise<string | null>
+  onNotificationNavigate: (callback: (data: { conversationId: string }) => void) => () => void
 
   // App State (session recovery)
   getAppState: (key: string) => Promise<string | null>
