@@ -127,7 +127,9 @@ function App(): JSX.Element {
   const [pendingApprovals, setPendingApprovals] = useState<DeniedTool[]>([])
   const [approvalConvId, setApprovalConvId] = useState<string | null>(null)
   const [gitBranch, setGitBranch] = useState<string | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState<false | 'global' | 'project'>(false)
+  const [settingsProject, setSettingsProject] = useState<Project | null>(null)
+  const [homedir, setHomedir] = useState('')
   const [planSidebarOpen, _setPlanSidebarOpen] = useState(false)
   const planSidebarOpenRef = useRef(false)
   const setPlanSidebarOpen = useCallback((open: boolean) => {
@@ -155,6 +157,7 @@ function App(): JSX.Element {
   const buffers = useRef(new Map<string, StreamBuffer>())
   const projectsRef = useRef(projects)
   useEffect(() => { projectsRef.current = projects }, [projects])
+  useEffect(() => { window.api.getHomedir().then(setHomedir) }, [])
   // Track last user message per conversation for title generation
   const lastUserMessages = useRef(new Map<string, string>())
 
@@ -1195,11 +1198,15 @@ function App(): JSX.Element {
         onArchiveConversation={handleArchiveConversation}
         onDeleteAllArchived={handleDeleteAllArchived}
         onNewChatForProject={handleNewChatForProject}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => setSettingsOpen('global')}
+        onOpenProjectSettings={(projectId: string) => {
+          const proj = projects.find((p) => p.id === projectId)
+          if (proj) { setSettingsProject(proj); setActiveProjectId(projectId); setSettingsOpen('project') }
+        }}
         recentlyRetitled={recentlyRetitled}
       />
       {settingsOpen ? (
-        <SettingsPage project={activeProject} onClose={() => setSettingsOpen(false)} contentFontSize={contentFontSize} onContentFontSizeChange={setContentFontSize} onTestPlanSidebar={() => {
+        <SettingsPage key={`${settingsOpen}-${settingsOpen === 'project' ? settingsProject?.id : 'global'}`} project={settingsOpen === 'project' ? settingsProject || activeProject : activeProject} homedir={homedir} scope={settingsOpen} onClose={() => setSettingsOpen(false)} contentFontSize={contentFontSize} onContentFontSizeChange={setContentFontSize} onTestPlanSidebar={() => {
           const testPlan = '## Test Plan\n\n1. **Step 1:** Read the codebase structure\n2. **Step 2:** Identify the relevant files\n3. **Step 3:** Implement the changes\n4. **Step 4:** Run tests and verify\n\n> This is a simulated plan to test the sidebar rendering.'
           setPlanContent(testPlan)
           setPlanSidebarOpen(true)
@@ -1326,12 +1333,13 @@ function App(): JSX.Element {
               onCancel={handleCancel}
               onNewChat={handleNewChat}
               onClearConversation={handleClearConversation}
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenSettings={() => setSettingsOpen('global')}
               onOpenInExplorer={handleOpenInExplorer}
               onOpenInTerminal={handleOpenInTerminal}
               onAddFile={handleAddFile}
               isLoading={isLoading}
               queueLength={activeConversationId ? (messageQueue.current.get(activeConversationId)?.length ?? 0) : 0}
+              queuedMessages={activeConversationId ? (messageQueue.current.get(activeConversationId) ?? []) : []}
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
               effortLevel={effortLevel}

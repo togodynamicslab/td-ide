@@ -34,6 +34,7 @@ interface InputBarProps {
   onAddFile: () => void
   isLoading: boolean
   queueLength: number
+  queuedMessages: { text: string }[]
   selectedModel: ModelId
   onModelChange: (model: ModelId) => void
   effortLevel: EffortLevel
@@ -431,7 +432,7 @@ function fileToDataUrl(file: File): Promise<string> {
 function InputBar({
   conversationId, onSend, onCancel, onNewChat, onClearConversation,
   onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile,
-  isLoading, queueLength, selectedModel, onModelChange,
+  isLoading, queueLength, queuedMessages, selectedModel, onModelChange,
   effortLevel, onEffortChange, permissionMode, onPermissionModeChange,
   disabledTools, onToggleTool, onArchiveConversation,
   useWorktree, onUseWorktreeChange, onShowUsage,
@@ -802,11 +803,10 @@ function InputBar({
       if (item) { executeSlash(item); return }
     }
 
-    if (isLoading && queueLength === 0) {
-      onCancel()
+    if (!text.trim() && images.length === 0) {
+      if (isLoading) onCancel()
       return
     }
-    if (!text.trim() && images.length === 0) return
     onSend(text, images)
     setText('')
     setImages([])
@@ -1170,11 +1170,18 @@ function InputBar({
                     </TooltipProvider>
                   )}
 
-                  {/* Queue indicator */}
-                  {queueLength > 0 && (
-                    <div className="flex items-center gap-1 text-xs text-orange-400 px-2">
-                      <ListOrdered className="h-3 w-3" />
-                      <span>{queueLength} queued</span>
+                  {/* Queued messages */}
+                  {queuedMessages.length > 0 && (
+                    <div className="flex items-center gap-1.5 px-2 overflow-x-auto">
+                      <ListOrdered className="h-3 w-3 text-orange-400 shrink-0" />
+                      {queuedMessages.map((msg, i) => (
+                        <span
+                          key={i}
+                          className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 font-mono truncate max-w-[180px] shrink-0"
+                        >
+                          {msg.text.slice(0, 50)}{msg.text.length > 50 ? '...' : ''}
+                        </span>
+                      ))}
                     </div>
                   )}
 
@@ -1228,7 +1235,7 @@ function InputBar({
                 {/* Submit / Stop */}
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    {status === 'streaming' && queueLength === 0 ? (
+                    {status === 'streaming' && !text.trim() && images.length === 0 ? (
                       <Button
                         type="button"
                         onClick={onCancel}
@@ -1255,7 +1262,7 @@ function InputBar({
                     )}
                   </TooltipTrigger>
                   <TooltipContent side="top">
-                    {status === 'streaming' && queueLength === 0 ? 'Stop generation' : isLoading ? 'Queue message' : 'Send message'}
+                    {status === 'streaming' && !text.trim() && images.length === 0 ? 'Stop generation' : isLoading ? 'Queue message' : 'Send message'}
                   </TooltipContent>
                 </Tooltip>
               </div>

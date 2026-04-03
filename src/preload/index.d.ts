@@ -18,6 +18,10 @@ interface ClaudeAPI {
   // File operations
   readFileContent: (filePath: string) => Promise<{ content: string; exists: boolean }>
   writeFileContent: (filePath: string, content: string) => Promise<{ success: boolean; error?: string }>
+  findFiles: (rootDir: string, filename: string, maxDepth?: number) => Promise<{ files: string[] }>
+  listDirectory: (dirPath: string) => Promise<{ files: { name: string; isDirectory: boolean }[] }>
+  deleteFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  getHomedir: () => Promise<string>
 
   // Dialog / files
   openFolder: () => Promise<string | null>

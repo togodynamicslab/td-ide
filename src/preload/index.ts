@@ -96,6 +96,18 @@ const api = {
   writeFileContent: (filePath: string, content: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('fs:write-file', { filePath, content })
   },
+  findFiles: (rootDir: string, filename: string, maxDepth?: number): Promise<{ files: string[] }> => {
+    return ipcRenderer.invoke('fs:find-files', { rootDir, filename, maxDepth })
+  },
+  listDirectory: (dirPath: string): Promise<{ files: { name: string; isDirectory: boolean }[] }> => {
+    return ipcRenderer.invoke('fs:list-directory', { dirPath })
+  },
+  deleteFile: (filePath: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('fs:delete-file', { filePath })
+  },
+  getHomedir: (): Promise<string> => {
+    return ipcRenderer.invoke('app:get-homedir')
+  },
 
   // File picker
   openFile: (cwd: string): Promise<string[] | null> => {

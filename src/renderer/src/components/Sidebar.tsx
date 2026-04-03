@@ -16,7 +16,8 @@ import {
   Archive,
   ArchiveRestore,
   GitFork,
-  AlertTriangle
+  AlertTriangle,
+  Wrench
 } from 'lucide-react'
 import WindowControls from './WindowControls'
 import MemoryIndicator from './StatusBar'
@@ -76,6 +77,7 @@ interface AppSidebarProps {
   onDeleteAllArchived?: (projectId: string) => void
   onNewChatForProject: (projectId: string) => void
   onOpenSettings: () => void
+  onOpenProjectSettings?: (projectId: string) => void
   recentlyRetitled?: Set<string>
 }
 
@@ -104,6 +106,7 @@ function AppSidebar({
   onDeleteAllArchived,
   onNewChatForProject,
   onOpenSettings,
+  onOpenProjectSettings,
   recentlyRetitled
 }: AppSidebarProps): JSX.Element {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
@@ -292,6 +295,12 @@ function AppSidebar({
                             <MessageSquarePlus className="h-3.5 w-3.5 mr-2" />
                             New Chat
                           </ContextMenuItem>
+                          {onOpenProjectSettings && (
+                            <ContextMenuItem onClick={() => onOpenProjectSettings(project.id)}>
+                              <Wrench className="h-3.5 w-3.5 mr-2" />
+                              Project Settings
+                            </ContextMenuItem>
+                          )}
                           <ContextMenuSeparator />
                           <ContextMenuItem onClick={() => startRenameProject(project)}>
                             <Pencil className="h-3.5 w-3.5 mr-2" />

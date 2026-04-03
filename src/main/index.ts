@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Notification } from 'electron'
 import { join } from 'path'
-import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs'
+import { writeFileSync, readFileSync, mkdirSync, existsSync, readdirSync, statSync, unlinkSync } from 'fs'
+import { homedir } from 'os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { spawn, ChildProcess, execSync } from 'child_process'
 import * as pty from 'node-pty'
@@ -125,6 +126,52 @@ ipcMain.handle('fs:write-file', async (_event, { filePath, content }: { filePath
     return { success: false, error: String((err as Error).message || err) }
   }
 })
+
+ipcMain.handle('fs:find-files', async (_event, { rootDir, filename, maxDepth = 1 }: { rootDir: string; filename: string; maxDepth?: number }) => {
+  const results: string[] = []
+  const walk = (dir: string, depth: number): void => {
+    if (depth > maxDepth) return
+    try {
+      for (const entry of readdirSync(dir)) {
+        if (entry === filename) results.push(join(dir, entry))
+        if (depth < maxDepth && !entry.startsWith('.') && entry !== 'node_modules') {
+          const full = join(dir, entry)
+          try { if (statSync(full).isDirectory()) walk(full, depth + 1) } catch { /* skip */ }
+        }
+      }
+    } catch { /* skip */ }
+  }
+  walk(rootDir, 0)
+  return { files: results }
+})
+
+ipcMain.handle('fs:list-directory', async (_event, { dirPath }: { dirPath: string }) => {
+  try {
+    if (!existsSync(dirPath)) return { files: [] }
+    const entries = readdirSync(dirPath)
+    const files = entries.map((name) => {
+      try {
+        return { name, isDirectory: statSync(join(dirPath, name)).isDirectory() }
+      } catch {
+        return { name, isDirectory: false }
+      }
+    })
+    return { files }
+  } catch {
+    return { files: [] }
+  }
+})
+
+ipcMain.handle('fs:delete-file', async (_event, { filePath }: { filePath: string }) => {
+  try {
+    if (existsSync(filePath)) unlinkSync(filePath)
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: String((err as Error).message || err) }
+  }
+})
+
+ipcMain.handle('app:get-homedir', () => homedir())
 
 // --- DB IPC handlers ---
 

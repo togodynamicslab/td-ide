@@ -1,70 +1,45 @@
-import { useState } from 'react'
-import { ArrowLeft, Bell, Bug, Loader2, Check, X, Map as MapIcon, Type, Minus, Plus } from 'lucide-react'
-import { Button } from './ui/button'
+import { useState, useMemo } from 'react'
+import { ArrowLeft, Puzzle, FileText, Terminal, Shield, Type, Bug, Globe, FolderOpen } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import McpSettings from './McpSettings'
+import AppearanceSettings from './settings/AppearanceSettings'
+import DeveloperSettings from './settings/DeveloperSettings'
+import ClaudeMdSettings from './settings/ClaudeMdSettings'
+import CommandsSettings from './settings/CommandsSettings'
+import PermissionsSettings from './settings/PermissionsSettings'
 import type { Project } from '../App'
 
 interface SettingsPageProps {
   project: Project | undefined
+  homedir: string
+  scope: 'global' | 'project'
   onClose: () => void
   contentFontSize: number
   onContentFontSizeChange: (size: number) => void
   onTestPlanSidebar?: () => void
 }
 
-function SettingsPage({ project, onClose, contentFontSize, onContentFontSizeChange, onTestPlanSidebar }: SettingsPageProps): JSX.Element {
-  const [notifState, setNotifState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [notifError, setNotifError] = useState('')
-  const [summaryState, setSummaryState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [summaryResult, setSummaryResult] = useState('')
+interface NavItem {
+  id: string
+  label: string
+  icon: typeof Puzzle
+  scopes: ('global' | 'project')[]
+}
 
-  const handleTestNotification = async () => {
-    setNotifState('loading')
-    try {
-      await window.api.showNotification(
-        'td-ide — Archive feature',
-        'Added archive support for conversation threads with collapsible section in sidebar.'
-      )
-      setNotifState('success')
-      setTimeout(() => setNotifState('idle'), 3000)
-    } catch (err) {
-      setNotifError(String(err))
-      setNotifState('error')
-      setTimeout(() => setNotifState('idle'), 5000)
-    }
-  }
+const allNavItems: NavItem[] = [
+  { id: 'claude-md', label: 'CLAUDE.md', icon: FileText, scopes: ['global', 'project'] },
+  { id: 'commands', label: 'Commands', icon: Terminal, scopes: ['global', 'project'] },
+  { id: 'permissions', label: 'Permissions', icon: Shield, scopes: ['global', 'project'] },
+  { id: 'mcp', label: 'MCP Servers', icon: Puzzle, scopes: ['project'] },
+  { id: 'appearance', label: 'Appearance', icon: Type, scopes: ['global'] },
+  { id: 'developer', label: 'Developer', icon: Bug, scopes: ['global'] },
+]
 
-  const handleTestSummary = async () => {
-    setSummaryState('loading')
-    setSummaryResult('')
-    try {
-      const result = await window.api.generateNotificationSummary(
-        'I implemented a new feature that adds archive support to conversation threads. Users can now right-click a conversation and select Archive to hide it from the main list. Archived conversations appear in a collapsible section.',
-        'Archive feature'
-      )
-      if (result) {
-        setSummaryResult(result)
-        setSummaryState('success')
-        // Also show it as an actual notification so you can see the end-to-end result
-        window.api.showNotification('td-ide — Archive feature', result)
-      } else {
-        setSummaryResult('AI summary returned null — showing fallback notification instead')
-        setSummaryState('error')
-        window.api.showNotification(
-          'td-ide — Archive feature',
-          'Added archive support for conversation threads with collapsible section in sidebar.'
-        )
-      }
-    } catch (err) {
-      setSummaryResult(String(err))
-      setSummaryState('error')
-      // Still show a fallback notification
-      window.api.showNotification(
-        'td-ide — Archive feature',
-        'Added archive support for conversation threads with collapsible section in sidebar.'
-      )
-    }
-  }
+function SettingsPage({ project, homedir, scope, onClose, contentFontSize, onContentFontSizeChange, onTestPlanSidebar }: SettingsPageProps): JSX.Element {
+  const navItems = useMemo(() => allNavItems.filter((item) => item.scopes.includes(scope)), [scope])
+  const [activeSection, setActiveSection] = useState(() => navItems[0]?.id || 'claude-md')
+
+  const fixedScope = scope === 'project' ? 'project' : 'global'
 
   return (
     <div className="flex flex-1 flex-col min-w-0 bg-td-bg">
@@ -78,181 +53,81 @@ function SettingsPage({ project, onClose, contentFontSize, onContentFontSizeChan
           <span className="text-xs font-medium">Back</span>
         </button>
         <div className="h-4 w-px bg-td-border" />
-        <h1 className="text-sm font-semibold text-td-text">Settings</h1>
-        {project && (
-          <>
-            <div className="h-4 w-px bg-td-border" />
-            <span className="text-xs text-td-muted truncate">{project.name}</span>
-          </>
+        {scope === 'global' ? (
+          <div className="flex items-center gap-1.5">
+            <Globe className="h-3.5 w-3.5 text-td-muted" />
+            <h1 className="text-sm font-semibold text-td-text">Global Settings</h1>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <FolderOpen className="h-3.5 w-3.5 text-td-muted" />
+            <h1 className="text-sm font-semibold text-td-text">Project Settings</h1>
+            {project && (
+              <>
+                <div className="h-4 w-px bg-td-border ml-1.5" />
+                <span className="text-xs text-td-muted truncate">{project.name}</span>
+              </>
+            )}
+          </div>
         )}
       </header>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-6 py-8">
-          <div className="mb-8">
-            <h2 className="text-lg font-semibold text-td-text tracking-tight">MCP Servers</h2>
-            <p className="text-[13px] text-td-muted mt-1.5 leading-relaxed">
-              Model Context Protocol servers extend Claude&apos;s capabilities with external tools
-              and data sources. Configure which servers are available for this project.
-            </p>
-          </div>
-
-          <McpSettings project={project} />
-
-          {/* Appearance */}
-          <div className="mt-12 pt-8 border-t border-td-border">
-            <div className="flex items-center gap-2 mb-1.5">
-              <Type className="h-4 w-4 text-td-muted" />
-              <h2 className="text-lg font-semibold text-td-text tracking-tight">Appearance</h2>
-            </div>
-            <p className="text-[13px] text-td-muted mb-6 leading-relaxed">
-              Customize how content is displayed in the chat area.
-            </p>
-
-            <div className="rounded-lg border border-td-border bg-td-surface/50 p-4 space-y-4">
-              <div>
-                <h3 className="text-sm font-medium text-td-text">Content Font Size</h3>
-                <p className="text-xs text-td-muted mt-1">
-                  Adjust the font size for assistant message content.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => onContentFontSizeChange(Math.max(10, contentFontSize - 1))}
-                  disabled={contentFontSize <= 10}
-                  className="h-7 w-7 rounded-lg border border-td-border bg-td-bg flex items-center justify-center text-td-muted hover:text-td-text hover:border-td-accent/50 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  <Minus className="h-3 w-3" />
-                </button>
-
-                <div className="flex-1 relative">
-                  <input
-                    type="range"
-                    min={10}
-                    max={24}
-                    step={1}
-                    value={contentFontSize}
-                    onChange={(e) => onContentFontSizeChange(parseInt(e.target.value, 10))}
-                    className="w-full accent-td-accent h-1.5 rounded-full appearance-none bg-td-border cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-td-accent [&::-webkit-slider-thumb]:shadow-sm"
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => onContentFontSizeChange(Math.min(24, contentFontSize + 1))}
-                  disabled={contentFontSize >= 24}
-                  className="h-7 w-7 rounded-lg border border-td-border bg-td-bg flex items-center justify-center text-td-muted hover:text-td-text hover:border-td-accent/50 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  <Plus className="h-3 w-3" />
-                </button>
-
-                <span className="text-xs font-mono text-td-text-secondary w-10 text-right">{contentFontSize}px</span>
-              </div>
-
-              <div className="text-xs text-td-muted rounded-lg bg-td-bg px-3 py-2" style={{ fontFamily: "'Lora', Georgia, serif", fontSize: `${contentFontSize}px` }}>
-                The quick brown fox jumps over the lazy dog.
-              </div>
-            </div>
-          </div>
-
-          {/* Developer Mode */}
-          <div className="mt-12 pt-8 border-t border-td-border">
-            <div className="flex items-center gap-2 mb-1.5">
-              <Bug className="h-4 w-4 text-td-muted" />
-              <h2 className="text-lg font-semibold text-td-text tracking-tight">Developer Mode</h2>
-            </div>
-            <p className="text-[13px] text-td-muted mb-6 leading-relaxed">
-              Debug tools for testing internal features.
-            </p>
-
-            {/* Notifications */}
-            <div className="rounded-lg border border-td-border bg-td-surface/50 p-4 space-y-4">
-              <div>
-                <h3 className="text-sm font-medium text-td-text flex items-center gap-2">
-                  <Bell className="h-3.5 w-3.5 text-td-muted" />
-                  Notifications
-                </h3>
-                <p className="text-xs text-td-muted mt-1">
-                  Test whether OS notifications are working on this system.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleTestNotification}
-                  disabled={notifState === 'loading'}
-                >
-                  {notifState === 'loading' ? (
-                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                  ) : notifState === 'success' ? (
-                    <Check className="h-3 w-3 mr-1.5 text-emerald-400" />
-                  ) : notifState === 'error' ? (
-                    <X className="h-3 w-3 mr-1.5 text-red-400" />
-                  ) : (
-                    <Bell className="h-3 w-3 mr-1.5" />
-                  )}
-                  {notifState === 'success' ? 'Sent!' : notifState === 'error' ? 'Failed' : 'Send test notification'}
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleTestSummary}
-                  disabled={summaryState === 'loading'}
-                >
-                  {summaryState === 'loading' ? (
-                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                  ) : (
-                    <Bell className="h-3 w-3 mr-1.5" />
-                  )}
-                  Test AI summary generation
-                </Button>
-              </div>
-
-              {notifState === 'error' && notifError && (
-                <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">
-                  {notifError}
-                </div>
+      {/* Body: sidebar + content */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Navigation sidebar */}
+        <nav className="w-48 shrink-0 border-r border-td-border overflow-y-auto py-3 px-2">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setActiveSection(item.id)}
+              className={cn(
+                'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors mb-0.5',
+                activeSection === item.id
+                  ? 'bg-td-hover text-td-text'
+                  : 'text-td-muted hover:bg-td-hover/50 hover:text-td-text'
               )}
+            >
+              <item.icon className="h-3.5 w-3.5 shrink-0" />
+              {item.label}
+            </button>
+          ))}
+        </nav>
 
-              {summaryState !== 'idle' && summaryResult && (
-                <div className={`text-xs rounded px-3 py-2 border ${
-                  summaryState === 'error'
-                    ? 'text-red-400 bg-red-500/10 border-red-500/20'
-                    : 'text-td-text-secondary bg-td-surface border-td-border'
-                }`}>
-                  <span className="text-td-muted font-medium">Result: </span>
-                  {summaryResult}
+        {/* Content area */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-2xl mx-auto px-6 py-8">
+            {activeSection === 'mcp' && (
+              <>
+                <div className="mb-8">
+                  <h2 className="text-lg font-semibold text-td-text tracking-tight">MCP Servers</h2>
+                  <p className="text-[13px] text-td-muted mt-1.5 leading-relaxed">
+                    Model Context Protocol servers extend Claude&apos;s capabilities with external tools
+                    and data sources. Configure which servers are available for this project.
+                  </p>
                 </div>
-              )}
-            </div>
+                <McpSettings project={project} />
+              </>
+            )}
 
-            {/* Plan Sidebar */}
-            <div className="rounded-lg border border-td-border bg-td-surface/50 p-4 space-y-4 mt-4">
-              <div>
-                <h3 className="text-sm font-medium text-td-text flex items-center gap-2">
-                  <MapIcon className="h-3.5 w-3.5 text-blue-400" />
-                  Plan Sidebar
-                </h3>
-                <p className="text-xs text-td-muted mt-1">
-                  Test whether the plan mode sidebar opens with sample content.
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onTestPlanSidebar}
-                disabled={!onTestPlanSidebar}
-              >
-                <MapIcon className="h-3 w-3 mr-1.5" />
-                Open test plan sidebar
-              </Button>
-            </div>
+            {activeSection === 'claude-md' && (
+              <ClaudeMdSettings homedir={homedir} projectPath={project?.path} fixedScope={fixedScope} />
+            )}
+
+            {activeSection === 'commands' && (
+              <CommandsSettings homedir={homedir} projectPath={project?.path} fixedScope={fixedScope} />
+            )}
+
+            {activeSection === 'permissions' && (
+              <PermissionsSettings homedir={homedir} projectPath={project?.path} fixedScope={fixedScope} />
+            )}
+
+            {activeSection === 'appearance' && (
+              <AppearanceSettings contentFontSize={contentFontSize} onContentFontSizeChange={onContentFontSizeChange} />
+            )}
+
+            {activeSection === 'developer' && (
+              <DeveloperSettings onTestPlanSidebar={onTestPlanSidebar} />
+            )}
           </div>
         </div>
       </div>
