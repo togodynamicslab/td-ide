@@ -606,7 +606,7 @@ function InputBar({
       description: 'Review changed code for issues and improvements',
       icon: <RefreshCw className="h-3.5 w-3.5 text-teal-400" />,
       category: 'automation' as SlashCategory,
-      action: () => onSend('Please review the recently changed code for reuse opportunities, quality issues, and efficiency improvements, then fix any issues you find.')
+      action: () => onSend('/simplify')
     },
     {
       name: 'btw',

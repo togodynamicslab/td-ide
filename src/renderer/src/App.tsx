@@ -1311,7 +1311,7 @@ function App(): JSX.Element {
                 </button>
               </div>
             )}
-            {pendingApprovals.length > 0 && (
+            {pendingApprovals.length > 0 && approvalConvId === activeConversationId && (
               <ApprovalWidget
                 denials={pendingApprovals}
                 onApprove={(approved) => { handleApproveChanges(approved); setDiffViewData(null) }}
