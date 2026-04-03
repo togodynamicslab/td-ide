@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 interface MarkdownProps {
   content: string
   className?: string
+  fontSize?: number
 }
 
 const components: Components = {
@@ -126,9 +127,9 @@ const components: Components = {
   }
 }
 
-export default function Markdown({ content, className }: MarkdownProps): JSX.Element {
+export default function Markdown({ content, className, fontSize = 14 }: MarkdownProps): JSX.Element {
   return (
-    <div className={cn('text-sm text-td-text-secondary break-words', className)}>
+    <div className={cn('text-td-text-secondary break-words', className)} style={{ fontFamily: "'Lora', Georgia, serif", fontSize: `${fontSize}px` }}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>

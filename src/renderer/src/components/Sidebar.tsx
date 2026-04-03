@@ -76,6 +76,7 @@ interface AppSidebarProps {
   onDeleteAllArchived?: (projectId: string) => void
   onNewChatForProject: (projectId: string) => void
   onOpenSettings: () => void
+  recentlyRetitled?: Set<string>
 }
 
 interface DeleteTarget {
@@ -102,7 +103,8 @@ function AppSidebar({
   onArchiveConversation,
   onDeleteAllArchived,
   onNewChatForProject,
-  onOpenSettings
+  onOpenSettings,
+  recentlyRetitled
 }: AppSidebarProps): JSX.Element {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     new Set(activeProjectId ? [activeProjectId] : [])
@@ -361,6 +363,8 @@ function AppSidebar({
                                             ? `+${queuedCounts.get(conv.id)} queued`
                                             : 'Working...'}
                                         </span>
+                                      ) : recentlyRetitled?.has(conv.id) ? (
+                                        <span className="text-[10px] text-[#D97757] shrink-0 animate-pulse">Title updated</span>
                                       ) : recentlyFinished.has(conv.id) ? (
                                         <span className="text-[10px] text-emerald-400 shrink-0">Done</span>
                                       ) : interruptedConversations?.has(conv.id) ? (

@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, sql, asc } from 'drizzle-orm'
 import * as schema from './schema'
 
 let db: ReturnType<typeof drizzle>
@@ -213,7 +213,17 @@ export function getMessagesByConversation(conversationId: string) {
     .select()
     .from(schema.messages)
     .where(eq(schema.messages.conversationId, conversationId))
+    .orderBy(asc(schema.messages.createdAt))
     .all()
+}
+
+export function getConversationMessageCount(conversationId: string): number {
+  const row = db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(schema.messages)
+    .where(eq(schema.messages.conversationId, conversationId))
+    .get()
+  return row?.count || 0
 }
 
 export function insertMessage(

@@ -7,7 +7,9 @@ import { Button } from './button'
 import { Separator } from './separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip'
 
-const SIDEBAR_WIDTH = '15rem'
+const SIDEBAR_WIDTH_DEFAULT = 240
+const SIDEBAR_WIDTH_MIN = 180
+const SIDEBAR_WIDTH_MAX = 480
 const SIDEBAR_WIDTH_ICON = '3rem'
 const SIDEBAR_KEYBOARD_SHORTCUT = 'b'
 
@@ -16,6 +18,8 @@ type SidebarContextProps = {
   open: boolean
   setOpen: (open: boolean) => void
   toggleSidebar: () => void
+  sidebarWidth: number
+  setSidebarWidth: React.Dispatch<React.SetStateAction<number>>
 }
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
@@ -42,6 +46,7 @@ function SidebarProvider({
   onOpenChange?: (open: boolean) => void
 }) {
   const [_open, _setOpen] = React.useState(defaultOpen)
+  const [sidebarWidth, setSidebarWidth] = React.useState(SIDEBAR_WIDTH_DEFAULT)
   const open = openProp ?? _open
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
@@ -73,8 +78,8 @@ function SidebarProvider({
   const state = open ? 'expanded' : 'collapsed'
 
   const contextValue = React.useMemo<SidebarContextProps>(
-    () => ({ state, open, setOpen, toggleSidebar }),
-    [state, open, setOpen, toggleSidebar]
+    () => ({ state, open, setOpen, toggleSidebar, sidebarWidth, setSidebarWidth }),
+    [state, open, setOpen, toggleSidebar, sidebarWidth]
   )
 
   return (
@@ -84,7 +89,7 @@ function SidebarProvider({
           data-slot="sidebar-wrapper"
           style={
             {
-              '--sidebar-width': SIDEBAR_WIDTH,
+              '--sidebar-width': `${sidebarWidth}px`,
               '--sidebar-width-icon': SIDEBAR_WIDTH_ICON,
               ...style
             } as React.CSSProperties
@@ -164,8 +169,59 @@ function Sidebar({
         >
           {children}
         </div>
+        {/* Resize handle */}
+        {state === 'expanded' && (
+          <SidebarResizeHandle side={side} />
+        )}
       </div>
     </div>
+  )
+}
+
+function SidebarResizeHandle({ side }: { side: 'left' | 'right' }) {
+  const { sidebarWidth, setSidebarWidth } = useSidebar()
+  const dragging = React.useRef(false)
+  const startX = React.useRef(0)
+  const startWidth = React.useRef(0)
+
+  const handlePointerDown = React.useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault()
+      dragging.current = true
+      startX.current = e.clientX
+      startWidth.current = sidebarWidth
+
+      const handlePointerMove = (ev: PointerEvent): void => {
+        if (!dragging.current) return
+        const delta = side === 'left' ? ev.clientX - startX.current : startX.current - ev.clientX
+        const newWidth = Math.min(Math.max(startWidth.current + delta, SIDEBAR_WIDTH_MIN), SIDEBAR_WIDTH_MAX)
+        setSidebarWidth(newWidth)
+      }
+
+      const handlePointerUp = (): void => {
+        dragging.current = false
+        document.removeEventListener('pointermove', handlePointerMove)
+        document.removeEventListener('pointerup', handlePointerUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      document.addEventListener('pointermove', handlePointerMove)
+      document.addEventListener('pointerup', handlePointerUp)
+    },
+    [sidebarWidth, setSidebarWidth, side]
+  )
+
+  return (
+    <div
+      onPointerDown={handlePointerDown}
+      className={cn(
+        'absolute top-0 bottom-0 w-1 cursor-col-resize z-20 hover:bg-td-accent/50 transition-colors',
+        side === 'left' ? 'right-0' : 'left-0'
+      )}
+    />
   )
 }
 

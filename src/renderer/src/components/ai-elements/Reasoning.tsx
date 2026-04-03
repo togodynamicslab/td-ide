@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { ChevronRight, Brain } from 'lucide-react'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
+import { Brain } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface ReasoningProps {
@@ -29,36 +28,41 @@ export default function Reasoning({
     wasStreamingRef.current = isStreaming
   }, [isStreaming])
 
-  const lineCount = content.split('\n').length
   const wordCount = content.split(/\s+/).filter(Boolean).length
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className={className}>
-      <CollapsibleTrigger className="flex items-center gap-2 w-full text-left py-1.5 px-3 rounded-md border border-td-border bg-td-bg hover:bg-td-hover transition-colors group text-xs">
-        <ChevronRight
-          className={cn(
-            'h-3 w-3 text-td-muted transition-transform duration-200',
-            open && 'rotate-90'
-          )}
-        />
+    <div className={cn('relative', className)}>
+      {/* Clickable title bar */}
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={cn(
+          'flex items-center gap-2 text-xs py-1.5 px-0.5 w-full text-left transition-colors rounded',
+          'hover:bg-td-hover/50',
+          isStreaming && 'shimmer-thinking'
+        )}
+      >
         <Brain className={cn(
           'h-3.5 w-3.5 shrink-0',
-          isStreaming ? 'text-purple-400 animate-pulse' : 'text-purple-400/60'
+          isStreaming ? 'text-purple-400' : 'text-purple-400/50'
         )} />
-        <span className="text-td-text-tertiary font-medium">
+        <span className={cn(
+          'font-medium',
+          isStreaming ? 'text-td-text-secondary' : 'text-td-text-tertiary'
+        )}>
           {isStreaming ? `${thinkingVerb || 'Thinking'}...` : 'Thought'}
         </span>
         {!isStreaming && (
-          <span className="text-td-muted">
-            {wordCount} words
-          </span>
+          <span className="text-td-muted">{wordCount} words</span>
         )}
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="mt-1 ml-5 px-3 py-2 rounded-md bg-td-bg border border-td-border text-xs text-td-text-tertiary leading-relaxed whitespace-pre-wrap overflow-x-auto max-h-[300px] overflow-y-auto">
+      </button>
+
+      {/* Collapsible content — no border/box, just indented text */}
+      {open && (
+        <div className="mt-1 pl-6 pr-1 text-xs text-td-text-tertiary/80 leading-relaxed whitespace-pre-wrap overflow-x-auto max-h-[300px] overflow-y-auto">
           {content}
         </div>
-      </CollapsibleContent>
-    </Collapsible>
+      )}
+    </div>
   )
 }

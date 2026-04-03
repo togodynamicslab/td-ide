@@ -10,6 +10,8 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "^0.24.2",
+    "@agentclientprotocol/sdk": "^0.18.0",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@radix-ui/react-alert-dialog": "^1.1.15",

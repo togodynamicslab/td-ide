@@ -7,9 +7,13 @@ interface ClaudeAPI {
   windowClose: () => void
   windowIsMaximized: () => Promise<boolean>
 
-  // Claude process
-  sendMessage: (message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools?: string[], apiKey?: string, apiProvider?: string) => void
+  // Claude process (ACP)
+  sendMessage: (message: string, conversationId: string, cwd: string, permissionMode?: string) => void
   cancelMessage: (conversationId: string) => void
+
+  // Permission handling (ACP)
+  onPermissionRequest: (callback: (data: { conversationId: string; requestId: string; toolCall: unknown; options: unknown[] }) => void) => () => void
+  respondToPermission: (requestId: string, optionId: string) => void
 
   // File operations
   readFileContent: (filePath: string) => Promise<{ content: string; exists: boolean }>
@@ -61,7 +65,7 @@ interface ClaudeAPI {
   addConversation: (id: string, projectId: string, title: string) => Promise<boolean>
   renameConversation: (id: string, title: string, titleEdited?: boolean) => Promise<boolean>
   archiveConversation: (id: string, archived: boolean) => Promise<boolean>
-  generateTitle: (conversationId: string, userMessage: string) => Promise<string | null>
+  generateTitle: (conversationId: string, userMessage: string, assistantMessage?: string) => Promise<string | null>
   setConversationWorktree: (id: string, worktreePath: string | null) => Promise<boolean>
   getConversationWorktree: (id: string) => Promise<string | null>
   deleteConversation: (id: string) => Promise<boolean>

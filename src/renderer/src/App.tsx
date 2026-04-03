@@ -10,7 +10,9 @@ import SettingsPage from './components/SettingsPage'
 import TerminalPanel from './components/TerminalPanel'
 import ResizeHandle from './components/ResizeHandle'
 import UsageDialog from './components/UsageDialog'
-// ApprovalWidget is rendered inline in ChatArea
+import ApprovalWidget from './components/ApprovalWidget'
+import type { DiffViewData } from './components/ApprovalWidget'
+import DiffSidebar from './components/DiffSidebar'
 
 export interface ToolBlock {
   id: string
@@ -113,6 +115,7 @@ function App(): JSX.Element {
   const [apiProvider, setApiProvider] = useState<ApiProvider>('anthropic')
   const [apiKey, setApiKey] = useState('')
   const [customModel, setCustomModel] = useState('')
+  const [contentFontSize, setContentFontSize] = useState(14)
   const [effortLevel, setEffortLevel] = useState<EffortLevel>('high')
   const [perConvPermission, setPerConvPermission] = useState<Map<string, PermissionMode>>(new Map())
   const [disabledTools, setDisabledTools] = useState<Set<string>>(new Set())
@@ -123,15 +126,24 @@ function App(): JSX.Element {
   const [approvalConvId, setApprovalConvId] = useState<string | null>(null)
   const [gitBranch, setGitBranch] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [planSidebarOpen, setPlanSidebarOpen] = useState(false)
+  const [planSidebarOpen, _setPlanSidebarOpen] = useState(false)
+  const planSidebarOpenRef = useRef(false)
+  const setPlanSidebarOpen = useCallback((open: boolean) => {
+    planSidebarOpenRef.current = open
+    _setPlanSidebarOpen(open)
+  }, [])
   const [planContent, setPlanContent] = useState('')
   const [planConvId, setPlanConvId] = useState<string | null>(null)
+  const [diffViewData, setDiffViewData] = useState<DiffViewData | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(300)
   const [useWorktree, setUseWorktree] = useState(false)
   const [interruptedConvIds, setInterruptedConvIds] = useState<Set<string>>(new Set())
   const [usageOpen, setUsageOpen] = useState(false)
   const [stateRestored, setStateRestored] = useState(false)
+  const [debugToast, setDebugToast] = useState<string | null>(null)
+  // Per-conversation context token tracking (latest input_tokens = current context size)
+  const [contextTokensMap, setContextTokensMap] = useState<Map<string, number>>(new Map())
 
   // Per-conversation usage tracking
   const usageMap = useRef(new Map<string, ConversationUsage>())
@@ -139,6 +151,8 @@ function App(): JSX.Element {
   const planDrafts = useRef(new Map<string, string>())
   // Per-conversation stream buffers for parallel support
   const buffers = useRef(new Map<string, StreamBuffer>())
+  // Track last user message per conversation for title generation
+  const lastUserMessages = useRef(new Map<string, string>())
 
   // Track which conversations have had their messages loaded from DB
   const loadedConvs = useRef(new Set<string>())
@@ -159,10 +173,10 @@ function App(): JSX.Element {
   )
   const isLoading = activeConversationId ? loadingConvs.has(activeConversationId) : false
 
-  // Per-conversation permission mode (defaults to 'full')
+  // Per-conversation permission mode (defaults to 'approve')
   const permissionMode: PermissionMode = activeConversationId
-    ? (perConvPermission.get(activeConversationId) || 'full')
-    : (perConvPermission.get('__new__') || 'full')
+    ? (perConvPermission.get(activeConversationId) || 'approve')
+    : (perConvPermission.get('__new__') || 'approve')
   const setPermissionMode = useCallback((mode: PermissionMode) => {
     const key = activeConversationId || '__new__'
     setPerConvPermission((prev) => {
@@ -214,6 +228,10 @@ function App(): JSX.Element {
       }
       if (state.customModel) {
         setCustomModel(state.customModel)
+      }
+      if (state.contentFontSize) {
+        const size = parseInt(state.contentFontSize, 10)
+        if (size >= 10 && size <= 24) setContentFontSize(size)
       }
 
       // Detect interrupted sessions from previous run
@@ -281,6 +299,11 @@ function App(): JSX.Element {
     if (!stateRestored) return
     window.api.setAppState('customModel', customModel)
   }, [customModel, stateRestored])
+
+  useEffect(() => {
+    if (!stateRestored) return
+    window.api.setAppState('contentFontSize', String(contentFontSize))
+  }, [contentFontSize, stateRestored])
 
   // --- Load conversations when project changes ---
   useEffect(() => {
@@ -597,6 +620,9 @@ function App(): JSX.Element {
       addMessage(convId, assistantMessage)
       window.api.addMessage(assistantMsgId, convId, 'assistant', '', '[]', '', '[]')
 
+      // Track user message for title generation
+      lastUserMessages.current.set(convId, text)
+
       // Initialize per-conversation buffer
       buffers.current.set(convId, { text: '', tools: [], reasoning: '', contentBlocks: [], assistantMsgId, startedAt: Date.now(), permissionMode })
       convPermissionModes.current.set(convId, permissionMode)
@@ -613,10 +639,9 @@ function App(): JSX.Element {
       // Use worktree path if the conversation has one, otherwise project path
       const conv = activeProject.conversations.find((c) => c.id === convId)
       const cwd = conv?.worktreePath || activeProject.path
-      const modelToSend = apiMode === 'apikey' && customModel ? customModel : selectedModel
-      window.api.sendMessage(messageText, convId, cwd, modelToSend, effortLevel, permissionMode, Array.from(disabledTools), apiMode === 'apikey' ? apiKey : '', apiMode === 'apikey' ? apiProvider : 'anthropic')
+      window.api.sendMessage(messageText, convId, cwd, permissionMode)
     },
-    [activeConversationId, activeProject, activeProjectId, createConversation, addMessage, selectedModel, effortLevel, permissionMode, disabledTools, apiMode, apiKey, apiProvider, customModel]
+    [activeConversationId, activeProject, activeProjectId, createConversation, addMessage, permissionMode]
   )
 
   // Keep ref in sync so handleDone (inside useEffect) can call the latest processMessage
@@ -648,22 +673,19 @@ function App(): JSX.Element {
     [activeProjectId, activeProject, activeConversationId, loadingConvs, processMessage, executeShellCommand]
   )
 
-  // --- Stream handling ---
+  // Helper: open plan sidebar for a conversation
+  const openPlanSidebar = useCallback((convId: string, text: string) => {
+    planDrafts.current.set(convId, text)
+    setPlanContent(text)
+    setPlanConvId(convId)
+    setActiveConversationId(convId)
+    setPlanSidebarOpen(true)
+  }, [setPlanSidebarOpen])
+
+  // --- Stream handling (ACP SessionUpdate events) ---
   useEffect(() => {
     const unsubStream = window.api.onStream((conversationId: string, data: unknown) => {
-      const c = data as Record<string, unknown>
-
-      // Capture rate limit info (fires outside of buffer context)
-      if (c.type === 'rate_limit_event') {
-        const info = c.rate_limit_info as Record<string, unknown> | undefined
-        if (info) {
-          const prev = usageMap.current.get(conversationId)
-          if (prev) {
-            prev.rateLimitResetsAt = Number(info.resetsAt) || 0
-          }
-        }
-      }
-
+      const update = data as Record<string, unknown>
       const buf = buffers.current.get(conversationId)
       if (!buf) return
 
@@ -678,156 +700,127 @@ function App(): JSX.Element {
         }
       }
 
-      if (c.type === 'assistant' && c.message) {
-        // assistant events are snapshots of the current turn's content (not cumulative across turns).
-        // They drop blocks from previous phases (e.g. thinking is gone once text starts).
-        // Only use these to pick up tool_use blocks (which have no delta equivalent).
-        const msg = c.message as Record<string, unknown>
-        if (msg.content && Array.isArray(msg.content)) {
-          // Also pick up text/thinking from assistant snapshots if we haven't captured any via deltas yet
-          // (fallback for cases where stream_events aren't delivered)
-          let hasNewText = false
-          for (const block of msg.content) {
-            const b = block as Record<string, unknown>
-            if (b.type === 'text' && typeof b.text === 'string' && !buf.text) {
-              buf.text = b.text
-              appendBlock('text', b.text)
-              hasNewText = true
-            } else if (b.type === 'thinking' && typeof b.thinking === 'string' && !buf.reasoning) {
-              buf.reasoning = b.thinking
-              appendBlock('thinking', b.thinking)
-              hasNewText = true
-            }
-          }
+      const sessionUpdate = update.sessionUpdate as string
 
-          const seenToolIds = new Set(buf.tools.map((t) => t.id))
-          for (const block of msg.content) {
-            const b = block as Record<string, unknown>
-            if (b.type === 'tool_use' && b.id) {
-              const toolId = b.id as string
-              if (!seenToolIds.has(toolId)) {
-                const tool: ToolBlock = {
-                  id: toolId,
-                  name: (b.name as string) || 'Unknown',
-                  input: (b.input as Record<string, unknown>) || {}
-                }
-                buf.tools.push(tool)
-                buf.contentBlocks.push({ type: 'tool_use', tool })
-                seenToolIds.add(toolId)
-              } else {
-                // Update existing tool's input (may become more complete in later snapshots)
-                const existing = buf.tools.find((t) => t.id === toolId)
-                if (existing && b.input) {
-                  existing.input = b.input as Record<string, unknown>
-                }
-              }
-            }
+      if (sessionUpdate === 'agent_message_chunk') {
+        // Text content from assistant
+        const content = update.content as Record<string, unknown> | undefined
+        if (content?.type === 'text') {
+          const text = (content as { text: string }).text || ''
+          buf.text += text
+          appendBlock('text', text)
+          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
+        }
+      } else if (sessionUpdate === 'agent_thought_chunk') {
+        // Thinking/reasoning content
+        const content = update.content as Record<string, unknown> | undefined
+        if (content?.type === 'text') {
+          const thinking = (content as { text: string }).text || ''
+          buf.reasoning += thinking
+          appendBlock('thinking', thinking)
+          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
+        }
+      } else if (sessionUpdate === 'tool_call') {
+        // New tool call
+        const toolCallId = update.toolCallId as string || `tool-${Date.now()}`
+        const title = update.title as string || 'Tool'
+        const rawInput = update.rawInput as Record<string, unknown> || {}
+        const kind = update.kind as string || 'other'
+        const seenToolIds = new Set(buf.tools.map((t) => t.id))
+        if (!seenToolIds.has(toolCallId)) {
+          const tool: ToolBlock = {
+            id: toolCallId,
+            name: title,
+            input: { ...rawInput, _kind: kind }
+          }
+          buf.tools.push(tool)
+          buf.contentBlocks.push({ type: 'tool_use', tool })
+          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
+        }
+      } else if (sessionUpdate === 'tool_call_update') {
+        // Update to an existing tool call (results, status changes)
+        const toolCallId = update.toolCallId as string
+        const existing = buf.tools.find((t) => t.id === toolCallId)
+        if (existing) {
+          if (update.rawOutput !== undefined) {
+            existing.input = { ...existing.input, _output: update.rawOutput }
+          }
+          if (update.status) {
+            existing.input = { ...existing.input, _status: update.status }
           }
           updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
         }
-      } else if (c.type === 'stream_event') {
-        // Handle the raw Anthropic API stream events for real-time content
-        const event = c.event as Record<string, unknown> | undefined
-        if (!event) return
-
-        if (event.type === 'content_block_delta') {
-          const delta = event.delta as Record<string, unknown> | undefined
-          if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-            buf.text += delta.text
-            appendBlock('text', delta.text)
-            updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
-          } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
-            buf.reasoning += delta.thinking
-            appendBlock('thinking', delta.thinking)
-            updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
-          }
+      } else if (sessionUpdate === 'usage_update') {
+        // Context window and cost update
+        const used = Number(update.used) || 0
+        const size = Number(update.size) || 0
+        const cost = update.cost as Record<string, unknown> | undefined
+        if (used > 0) {
+          setContextTokensMap(prev => {
+            const next = new Map(prev)
+            next.set(conversationId, used)
+            return next
+          })
         }
-      } else if (c.type === 'content_block_delta') {
-        const delta = c.delta as Record<string, unknown> | undefined
-        if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-          buf.text += delta.text
-          appendBlock('text', delta.text)
-          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
-        } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
-          buf.reasoning += delta.thinking
-          appendBlock('thinking', delta.thinking)
-          updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
-        }
-      } else if (c.type === 'result') {
-        const duration = Date.now() - buf.startedAt
-        if (typeof c.result === 'string') {
-          buf.text = c.result as string
-          // Rebuild contentBlocks for result override — result replaces all text
-          buf.contentBlocks = buf.contentBlocks.filter(b => b.type !== 'text')
-          buf.contentBlocks.push({ type: 'text', text: buf.text })
-        }
-        updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
-
-        // Auto-capture plan content when in plan mode
-        if (buf.permissionMode === 'plan' && buf.text.trim()) {
-          planDrafts.current.set(conversationId, buf.text)
-          setPlanContent(buf.text)
-          setPlanConvId(conversationId)
-          setActiveConversationId(conversationId)
-          setPlanSidebarOpen(true)
-        }
-
-        // Accumulate usage stats from result
-        const costUsd = typeof c.total_cost_usd === 'number' ? c.total_cost_usd : 0
-        const resultUsage = c.usage as Record<string, unknown> | undefined
-        const resultModelUsage = c.modelUsage as Record<string, Record<string, unknown>> | undefined
-        if (resultUsage || costUsd) {
+        if (cost || used) {
           const prev = usageMap.current.get(conversationId) || {
             totalCostUsd: 0, inputTokens: 0, outputTokens: 0,
             cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0,
             durationMs: 0, modelUsage: {}
           }
-          // Merge per-model usage
-          const mergedModels = { ...prev.modelUsage }
-          if (resultModelUsage) {
-            for (const [model, data] of Object.entries(resultModelUsage)) {
-              const existing = mergedModels[model]
-              mergedModels[model] = {
-                model,
-                inputTokens: (existing?.inputTokens || 0) + (Number(data.inputTokens) || 0),
-                outputTokens: (existing?.outputTokens || 0) + (Number(data.outputTokens) || 0),
-                cacheReadInputTokens: (existing?.cacheReadInputTokens || 0) + (Number(data.cacheReadInputTokens) || 0),
-                cacheCreationInputTokens: (existing?.cacheCreationInputTokens || 0) + (Number(data.cacheCreationInputTokens) || 0),
-                costUSD: (existing?.costUSD || 0) + (Number(data.costUSD) || 0)
-              }
-            }
+          usageMap.current.set(conversationId, {
+            ...prev,
+            inputTokens: used,
+            totalCostUsd: cost ? Number((cost as Record<string, unknown>).total) || prev.totalCostUsd : prev.totalCostUsd
+          })
+        }
+      } else if (sessionUpdate === 'prompt_complete') {
+        // Final prompt response with stop reason and usage
+        const duration = Date.now() - buf.startedAt
+        updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
+
+        // Auto-capture plan content when in plan mode
+        if (buf.permissionMode === 'plan' && buf.text.trim()) {
+          openPlanSidebar(conversationId, buf.text)
+        }
+
+        // Usage from prompt response
+        const usage = update.usage as Record<string, unknown> | undefined
+        if (usage) {
+          const prev = usageMap.current.get(conversationId) || {
+            totalCostUsd: 0, inputTokens: 0, outputTokens: 0,
+            cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0,
+            durationMs: 0, modelUsage: {}
           }
           usageMap.current.set(conversationId, {
-            totalCostUsd: prev.totalCostUsd + costUsd,
-            inputTokens: prev.inputTokens + (Number(resultUsage?.input_tokens) || 0),
-            outputTokens: prev.outputTokens + (Number(resultUsage?.output_tokens) || 0),
-            cacheReadTokens: prev.cacheReadTokens + (Number(resultUsage?.cache_read_input_tokens) || 0),
-            cacheCreationTokens: prev.cacheCreationTokens + (Number(resultUsage?.cache_creation_input_tokens) || 0),
-            turns: prev.turns + (Number(c.num_turns) || 1),
-            durationMs: prev.durationMs + (Number(c.duration_ms) || 0),
-            modelUsage: mergedModels,
-            rateLimitResetsAt: prev.rateLimitResetsAt
+            ...prev,
+            inputTokens: prev.inputTokens + (Number(usage.inputTokens) || 0),
+            outputTokens: prev.outputTokens + (Number(usage.outputTokens) || 0),
+            turns: prev.turns + 1,
+            durationMs: prev.durationMs + duration
           })
         }
 
-        const denials = c.permission_denials as DeniedTool[] | undefined
-        if (denials && Array.isArray(denials) && denials.length > 0) {
-          // In "approve" mode, show the approval dialog with full tool details
-          const convMode = convPermissionModes.current.get(conversationId)
-          if (convMode === 'approve') {
-            setPendingApprovals(denials)
-            setApprovalConvId(conversationId)
-          } else {
-            setPermissionDenied(true)
-            setDeniedCount(denials.length)
-            setDeniedConversationId(conversationId)
-          }
-        }
         // Save final text for notification before buffer is deleted
         finalTexts.current.set(conversationId, buf.text)
         // Persist final assistant message to DB
         window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration, JSON.stringify(buf.contentBlocks))
         buffers.current.delete(conversationId)
+      } else if (sessionUpdate === 'plan') {
+        // Plan entries from the agent
+        const entries = update.entries as Array<Record<string, unknown>> | undefined
+        if (entries) {
+          const planText = entries.map(e => `- [${e.status}] ${e.content}`).join('\n')
+          planDrafts.current.set(conversationId, planText)
+          setPlanContent(planText)
+          setPlanConvId(conversationId)
+        }
+      } else if (sessionUpdate === 'current_mode_update') {
+        // Mode changed by the agent
+        const currentModeId = update.currentModeId as string | undefined
+        if (currentModeId) {
+          convPermissionModes.current.set(conversationId, currentModeId as PermissionMode)
+        }
       }
     })
 
@@ -837,11 +830,6 @@ function App(): JSX.Element {
       buf.text += `\n[Error: ${error}]`
       buf.contentBlocks.push({ type: 'text', text: `\n[Error: ${error}]` })
       updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
-      if (error.toLowerCase().includes('permission') || error.toLowerCase().includes('denied')) {
-        setPermissionDenied(true)
-        setDeniedCount((prev) => prev + 1)
-        setDeniedConversationId(conversationId)
-      }
     })
 
     const handleDone = (conversationId: string) => {
@@ -858,11 +846,7 @@ function App(): JSX.Element {
 
         // Fallback: open plan sidebar if result event didn't trigger it
         if (buf.permissionMode === 'plan' && buf.text.trim()) {
-          planDrafts.current.set(conversationId, buf.text)
-          setPlanContent(buf.text)
-          setPlanConvId(conversationId)
-          setActiveConversationId(conversationId)
-          setPlanSidebarOpen(true)
+          openPlanSidebar(conversationId, buf.text)
         }
 
         buffers.current.delete(conversationId)
@@ -871,11 +855,7 @@ function App(): JSX.Element {
       // Final fallback: check stored permission mode even if buffer was already deleted by result handler
       const convMode = convPermissionModes.current.get(conversationId)
       if (convMode === 'plan' && assistantText.trim() && !planDrafts.current.has(conversationId)) {
-        planDrafts.current.set(conversationId, assistantText)
-        setPlanContent(assistantText)
-        setPlanConvId(conversationId)
-        setActiveConversationId(conversationId)
-        setPlanSidebarOpen(true)
+        openPlanSidebar(conversationId, assistantText)
       }
       convPermissionModes.current.delete(conversationId)
       setLoadingConvs((prev) => {
@@ -885,42 +865,30 @@ function App(): JSX.Element {
       })
 
       // Auto-generate/update title after each response if not manually edited
-      setProjects((prev) => {
-        for (const p of prev) {
-          const conv = p.conversations.find((c) => c.id === conversationId)
-          if (conv && !conv.titleEdited) {
-            // Collect the last few user and assistant messages for context
-            const recentMsgs = conv.messages.slice(-4)
-            const userParts = recentMsgs.filter((m) => m.role === 'user').map((m) => m.content).join('\n')
-            const assistantParts = recentMsgs.filter((m) => m.role === 'assistant').map((m) => m.content).join('\n')
-            if (userParts) {
-              window.api.generateTitle(conversationId, userParts, assistantParts).then((newTitle) => {
-                if (newTitle) {
-                  setProjects((p2) =>
-                    p2.map((proj) => ({
-                      ...proj,
-                      conversations: proj.conversations.map((c) =>
-                        c.id === conversationId ? { ...c, title: newTitle } : c
-                      )
-                    }))
-                  )
-                  // Flash "title updated" indicator
-                  setRecentlyRetitled((s) => new Set(s).add(conversationId))
-                  setTimeout(() => {
-                    setRecentlyRetitled((s) => {
-                      const next = new Set(s)
-                      next.delete(conversationId)
-                      return next
-                    })
-                  }, 3000)
-                }
+      const userMsg = lastUserMessages.current.get(conversationId) || ''
+      if (userMsg || assistantText) {
+        window.api.generateTitle(conversationId, userMsg || assistantText.slice(0, 200), assistantText).then((newTitle) => {
+          if (newTitle) {
+            setProjects((p2) =>
+              p2.map((proj) => ({
+                ...proj,
+                conversations: proj.conversations.map((c) =>
+                  c.id === conversationId ? { ...c, title: newTitle } : c
+                )
+              }))
+            )
+            // Flash "title updated" indicator
+            setRecentlyRetitled((s) => new Set(s).add(conversationId))
+            setTimeout(() => {
+              setRecentlyRetitled((s) => {
+                const next = new Set(s)
+                next.delete(conversationId)
+                return next
               })
-            }
-            break
+            }, 3000)
           }
-        }
-        return prev
-      })
+        })
+      }
 
       // Send desktop notification only when the window is not focused
       if (assistantText && document.hidden) {
@@ -984,56 +952,49 @@ function App(): JSX.Element {
     }
   }, [activeConversationId, updateLastAssistantMessage])
 
-  // --- Approval flow handlers ---
-  const handleApproveChanges = useCallback(async (approved: DeniedTool[]) => {
-    // Apply approved file changes
-    const appliedFiles: string[] = []
-    for (const tool of approved) {
-      const input = tool.tool_input
-      if (tool.tool_name === 'Write' && typeof input.file_path === 'string') {
-        await window.api.writeFileContent(input.file_path, String(input.content || ''))
-        appliedFiles.push(input.file_path)
-      } else if (tool.tool_name === 'Edit' && typeof input.file_path === 'string' && typeof input.old_string === 'string' && typeof input.new_string === 'string') {
-        const { content, exists } = await window.api.readFileContent(input.file_path)
-        if (exists) {
-          const updated = input.replace_all
-            ? content.split(input.old_string as string).join(input.new_string as string)
-            : content.replace(input.old_string as string, input.new_string as string)
-          await window.api.writeFileContent(input.file_path, updated)
-          appliedFiles.push(input.file_path)
-        }
+  // --- ACP Permission handling ---
+  // Listen for permission requests from the ACP agent
+  useEffect(() => {
+    const unsub = window.api.onPermissionRequest((data) => {
+      const newDenial: DeniedTool = {
+        tool_name: (data.toolCall as Record<string, unknown>)?.title as string || 'Tool',
+        tool_use_id: data.requestId,
+        tool_input: (data.toolCall as Record<string, unknown>)?.rawInput as Record<string, unknown> || {}
       }
-    }
+      setPendingApprovals((prev) => [...prev, newDenial])
+      setApprovalConvId(data.conversationId)
+    })
+    return unsub
+  }, [])
 
+  const handleApproveChanges = useCallback(async (approved: DeniedTool[]) => {
+    // With ACP, approving sends the permission response back to the agent
+    // The agent executes the tool itself — no client-side file writes needed
+    for (const tool of approved) {
+      // tool_use_id is the ACP requestId, 'allow' is the optionId for allow_once
+      window.api.respondToPermission(tool.tool_use_id, 'allow')
+    }
     setPendingApprovals([])
-
-    // Resume the conversation telling Claude what was applied
-    if (approvalConvId) {
-      const msg = appliedFiles.length > 0
-        ? `I approved and applied changes to: ${appliedFiles.join(', ')}. Continue.`
-        : 'I approved the requested tools. Continue.'
-      processMessage(msg, [], approvalConvId)
-    }
     setApprovalConvId(null)
-  }, [approvalConvId, processMessage])
+  }, [])
 
   const handleApproveAllForSession = useCallback(() => {
-    // Switch to full access and resume
-    setPermissionMode('full')
-    setPendingApprovals([])
-    if (approvalConvId) {
-      processMessage('I switched to full access mode. Continue with all permissions granted.', [], approvalConvId)
+    // 'allow_always' — agent will auto-allow this tool for rest of session
+    for (const tool of pendingApprovals) {
+      window.api.respondToPermission(tool.tool_use_id, 'allow_always')
     }
+    setPendingApprovals([])
     setApprovalConvId(null)
-  }, [approvalConvId, processMessage, setPermissionMode])
+  }, [pendingApprovals])
 
   const handleRejectAllChanges = useCallback(() => {
-    setPendingApprovals([])
-    if (approvalConvId) {
-      processMessage('I rejected all proposed changes. Please suggest a different approach.', [], approvalConvId)
+    for (const tool of pendingApprovals) {
+      // 'reject' is the optionId for reject_once
+      window.api.respondToPermission(tool.tool_use_id, 'reject')
     }
+    setPendingApprovals([])
     setApprovalConvId(null)
-  }, [approvalConvId, processMessage])
+  }, [pendingApprovals])
 
   const handleNewChat = useCallback(() => {
     setActiveConversationId(null)
@@ -1214,7 +1175,7 @@ function App(): JSX.Element {
         recentlyRetitled={recentlyRetitled}
       />
       {settingsOpen ? (
-        <SettingsPage project={activeProject} onClose={() => setSettingsOpen(false)} onTestPlanSidebar={() => {
+        <SettingsPage project={activeProject} onClose={() => setSettingsOpen(false)} contentFontSize={contentFontSize} onContentFontSizeChange={setContentFontSize} onTestPlanSidebar={() => {
           const testPlan = '## Test Plan\n\n1. **Step 1:** Read the codebase structure\n2. **Step 2:** Identify the relevant files\n3. **Step 3:** Implement the changes\n4. **Step 4:** Run tests and verify\n\n> This is a simulated plan to test the sidebar rendering.'
           setPlanContent(testPlan)
           setPlanSidebarOpen(true)
@@ -1242,10 +1203,7 @@ function App(): JSX.Element {
                     messages={activeConversation?.messages || []}
                     isLoading={isLoading}
                     permissionMode={permissionMode}
-                    pendingApprovals={pendingApprovals}
-                    onApproveTools={handleApproveChanges}
-                    onApproveAllForSession={handleApproveAllForSession}
-                    onRejectTools={handleRejectAllChanges}
+                    contentFontSize={contentFontSize}
                   />
                 </div>
                 {terminalOpen && (
@@ -1269,6 +1227,17 @@ function App(): JSX.Element {
                   onExecutePlan={handleExecutePlan}
                   onClose={() => setPlanSidebarOpen(false)}
                   isStreaming={isLoading}
+                />
+              )}
+              {diffViewData && (
+                <DiffSidebar
+                  filePath={diffViewData.filePath}
+                  action={diffViewData.action}
+                  oldString={diffViewData.oldString}
+                  newString={diffViewData.newString}
+                  newContent={diffViewData.newContent}
+                  command={diffViewData.command}
+                  onClose={() => setDiffViewData(null)}
                 />
               )}
             </div>
@@ -1305,6 +1274,28 @@ function App(): JSX.Element {
                 setDeniedConversationId(null)
               }}
             />
+            {/* Context exhaustion warning */}
+            {activeConversationId && (contextTokensMap.get(activeConversationId) || 0) >= 180_000 && (
+              <div className="mx-2 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center gap-3 text-xs">
+                <span className="text-red-400 font-medium shrink-0">Context nearly full</span>
+                <span className="text-td-muted">This conversation is approaching the context limit. Responses may degrade or the session may stop.</span>
+                <button
+                  onClick={handleNewChat}
+                  className="shrink-0 px-2.5 py-1 rounded-md bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors font-medium"
+                >
+                  New chat
+                </button>
+              </div>
+            )}
+            {pendingApprovals.length > 0 && (
+              <ApprovalWidget
+                denials={pendingApprovals}
+                onApprove={(approved) => { handleApproveChanges(approved); setDiffViewData(null) }}
+                onApproveAll={() => { handleApproveAllForSession(); setDiffViewData(null) }}
+                onReject={() => { handleRejectAllChanges(); setDiffViewData(null) }}
+                onViewDiff={setDiffViewData}
+              />
+            )}
             <InputBar
               conversationId={activeConversationId}
               onSend={handleSend}
@@ -1336,6 +1327,7 @@ function App(): JSX.Element {
               useWorktree={useWorktree}
               onUseWorktreeChange={setUseWorktree}
               onShowUsage={() => setUsageOpen(true)}
+              contextTokens={activeConversationId ? (contextTokensMap.get(activeConversationId) || 0) : 0}
               apiMode={apiMode}
               onApiModeChange={setApiMode}
               apiProvider={apiProvider}

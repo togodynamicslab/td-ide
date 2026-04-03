@@ -3,18 +3,14 @@ import { Code2, Loader2, Map, CheckCircle2, AlertTriangle, X, RotateCcw } from '
 import { cn } from '@/lib/utils'
 import { Markdown, Reasoning } from './ai-elements'
 import InlineToolCall from './InlineToolCall'
-import ApprovalWidget from './ApprovalWidget'
 import { useThinkingVerb } from '../hooks/useThinkingVerb'
-import type { Message, ContentBlock, PermissionMode, DeniedTool } from '../App'
+import type { Message, ContentBlock, PermissionMode } from '../App'
 
 interface ChatAreaProps {
   messages: Message[]
   isLoading: boolean
   permissionMode: PermissionMode
-  pendingApprovals: DeniedTool[]
-  onApproveTools: (approved: DeniedTool[]) => void
-  onApproveAllForSession: () => void
-  onRejectTools: () => void
+  contentFontSize?: number
 }
 
 /** Build display blocks from message, with legacy fallback */
@@ -28,7 +24,7 @@ function getDisplayBlocks(msg: Message): ContentBlock[] {
   return blocks
 }
 
-function ChatArea({ messages, isLoading, permissionMode, pendingApprovals, onApproveTools, onApproveAllForSession, onRejectTools }: ChatAreaProps): JSX.Element {
+function ChatArea({ messages, isLoading, permissionMode, contentFontSize = 14 }: ChatAreaProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastSnapshotRef = useRef('')
   const prevMsgCount = useRef(0)
@@ -159,7 +155,7 @@ function ChatArea({ messages, isLoading, permissionMode, pendingApprovals, onApp
                             )
                           case 'text':
                             return (
-                              <Markdown key={blockIdx} content={block.text} />
+                              <Markdown key={blockIdx} content={block.text} fontSize={contentFontSize} />
                             )
                           case 'tool_use':
                             return (
@@ -212,19 +208,7 @@ function ChatArea({ messages, isLoading, permissionMode, pendingApprovals, onApp
             )
           })}
 
-          {/* Inline approval widget */}
-          {pendingApprovals.length > 0 && (
-            <div className="flex justify-start">
-              <div className="text-td-text-secondary w-full max-w-[85%] rounded-lg px-4 py-3">
-                <ApprovalWidget
-                  denials={pendingApprovals}
-                  onApprove={onApproveTools}
-                  onApproveAll={onApproveAllForSession}
-                  onReject={onRejectTools}
-                />
-              </div>
-            </div>
-          )}
+          {/* Approval widget lives above InputBar — see App.tsx */}
         </div>
       </div>
     </div>

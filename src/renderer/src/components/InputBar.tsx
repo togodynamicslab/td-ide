@@ -7,7 +7,8 @@ import {
   Moon, Settings, FileCode, Minimize2, FolderOpen,
   Terminal, Zap, Info, Check, Timer, RefreshCw,
   Code2, Bug, Keyboard, BookOpen, Archive, GitFork, BarChart3,
-  Key, Eye, EyeOff, ChevronDown, CircleCheck, Cpu, Search, DollarSign
+  Key, Eye, EyeOff, ChevronDown, CircleCheck, Cpu, Search, DollarSign,
+  AlertTriangle
 } from 'lucide-react'
 import { Button } from './ui/button'
 import {
@@ -53,6 +54,7 @@ interface InputBarProps {
   onApiKeyChange: (key: string) => void
   customModel: string
   onCustomModelChange: (model: string) => void
+  contextTokens: number
 }
 
 // --- Slash command definitions ---
@@ -162,6 +164,22 @@ function formatContext(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
   if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`
   return String(tokens)
+}
+
+// Context window limits per model (tokens)
+const MODEL_CONTEXT_LIMITS: Record<string, number> = {
+  opus: 200_000,
+  sonnet: 200_000,
+  haiku: 200_000
+}
+
+function getContextStatus(tokens: number, model: string): { percent: number; level: 'ok' | 'moderate' | 'warning' | 'critical'; label: string; color: string } {
+  const limit = MODEL_CONTEXT_LIMITS[model] || 200_000
+  const percent = Math.min((tokens / limit) * 100, 100)
+  if (percent >= 90) return { percent, level: 'critical', label: `${Math.round(percent)}% context used`, color: 'text-red-400' }
+  if (percent >= 75) return { percent, level: 'warning', label: `${Math.round(percent)}% context used`, color: 'text-orange-400' }
+  if (percent >= 50) return { percent, level: 'moderate', label: `${Math.round(percent)}% context used`, color: 'text-yellow-400' }
+  return { percent, level: 'ok', label: `${Math.round(percent)}% context used`, color: 'text-td-muted' }
 }
 
 function OpenRouterModelPicker({
@@ -320,25 +338,15 @@ function OpenRouterModelPicker({
 }
 
 function ModelConfigPopover({
-  selectedModel, onModelChange, apiMode, onApiModeChange,
-  apiProvider, onApiProviderChange, apiKey, onApiKeyChange,
+  selectedModel, onModelChange,
   customModel, onCustomModelChange,
 }: {
   selectedModel: ModelId
   onModelChange: (m: ModelId) => void
-  apiMode: ApiMode
-  onApiModeChange: (m: ApiMode) => void
-  apiProvider: ApiProvider
-  onApiProviderChange: (p: ApiProvider) => void
-  apiKey: string
-  onApiKeyChange: (k: string) => void
   customModel: string
   onCustomModelChange: (m: string) => void
 }) {
-  const [showKey, setShowKey] = useState(false)
-  const displayModel = apiMode === 'apikey' && customModel
-    ? (orModelsCache?.find((m) => m.id === customModel)?.name || customModel)
-    : MODEL_LABELS[selectedModel]
+  const displayModel = MODEL_LABELS[selectedModel]
 
   return (
     <Popover>
@@ -346,164 +354,65 @@ function ModelConfigPopover({
         <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5 text-td-muted hover:text-td-text font-medium px-2">
           <Sparkles className="h-3 w-3 text-orange-400" />
           <span className="hidden sm:inline truncate max-w-[160px]">{displayModel}</span>
-          {apiMode === 'apikey' && (
-            <span className="flex items-center gap-0.5">
-              <Key className="h-2.5 w-2.5 text-amber-400" />
-            </span>
-          )}
           <ChevronDown className="h-2.5 w-2.5 opacity-50" />
         </Button>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className="w-80 p-0">
-        {/* Model cards — only show when on subscription or Anthropic direct */}
-        {(apiMode === 'subscription' || apiProvider === 'anthropic') && (
-          <>
-            <div className="p-3 pb-2">
-              <div className="text-[11px] font-medium text-td-muted uppercase tracking-wider mb-2">Model</div>
-              <div className="space-y-1">
-                {MODEL_INFO.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => { onModelChange(m.id); onCustomModelChange('') }}
-                    className={cn(
-                      'w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-all',
-                      selectedModel === m.id && !customModel
-                        ? 'bg-td-accent/10 border border-td-accent/30'
-                        : 'hover:bg-td-hover border border-transparent'
-                    )}
-                  >
-                    <div className={cn(
-                      'h-7 w-7 rounded-lg flex items-center justify-center shrink-0',
-                      selectedModel === m.id && !customModel ? 'bg-td-accent/20' : 'bg-td-bg'
-                    )}>
-                      {selectedModel === m.id && !customModel
-                        ? <CircleCheck className="h-3.5 w-3.5 text-td-accent" />
-                        : <Cpu className="h-3.5 w-3.5 text-td-muted" />
-                      }
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className={cn('text-xs font-medium', selectedModel === m.id && !customModel ? 'text-td-text' : 'text-td-text-secondary')}>
-                          {m.label}
-                        </span>
-                        {m.badge && (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-orange-500/15 text-orange-400 font-medium">
-                            {m.badge}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[10px] text-td-muted">{m.description}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="h-px bg-td-border" />
-          </>
-        )}
-
-        {/* OpenRouter model picker — shown when OpenRouter is the provider */}
-        {apiMode === 'apikey' && apiProvider === 'openrouter' && (
-          <>
-            <div className="p-3 pb-2">
-              <OpenRouterModelPicker customModel={customModel} onCustomModelChange={onCustomModelChange} />
-            </div>
-            <div className="h-px bg-td-border" />
-          </>
-        )}
-
-        {/* API Configuration */}
-        <div className="p-3">
-          <Tabs value={apiMode} onValueChange={(v) => onApiModeChange(v as ApiMode)}>
-            <TabsList>
-              <TabsTrigger value="subscription">
-                <Zap className="h-3 w-3 mr-1.5" />
-                Subscription
-              </TabsTrigger>
-              <TabsTrigger value="apikey">
-                <Key className="h-3 w-3 mr-1.5" />
-                API Key
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="subscription">
-              <div className="flex items-center gap-2 rounded-lg bg-td-bg px-3 py-2.5">
-                <div className="h-6 w-6 rounded-full bg-emerald-500/15 flex items-center justify-center">
-                  <CircleCheck className="h-3 w-3 text-emerald-400" />
-                </div>
-                <div>
-                  <div className="text-xs text-td-text font-medium">Using Claude CLI authentication</div>
-                  <div className="text-[10px] text-td-muted">Your subscription plan applies</div>
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="apikey">
-              <div className="space-y-3">
-                {/* Provider toggle */}
-                <Tabs value={apiProvider} onValueChange={(v) => onApiProviderChange(v as ApiProvider)}>
-                  <TabsList>
-                    <TabsTrigger value="anthropic">Anthropic</TabsTrigger>
-                    <TabsTrigger value="openrouter">OpenRouter</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-
-                {/* API Key input */}
-                <div>
-                  <label className="text-[10px] font-medium text-td-muted uppercase tracking-wider mb-1.5 block">
-                    {apiProvider === 'openrouter' ? 'OpenRouter' : 'Anthropic'} API Key
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showKey ? 'text' : 'password'}
-                      value={apiKey}
-                      onChange={(e) => onApiKeyChange(e.target.value)}
-                      placeholder={apiProvider === 'openrouter' ? 'sk-or-v1-...' : 'sk-ant-api03-...'}
-                      className="w-full bg-td-bg border border-td-border rounded-lg px-3 py-2 pr-8 text-xs text-td-text placeholder-td-muted/50 outline-none focus:border-td-accent/50 focus:ring-1 focus:ring-td-accent/20 transition-all"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowKey(!showKey)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-td-muted hover:text-td-text transition-colors"
-                    >
-                      {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                    </button>
-                  </div>
-                  {apiKey ? (
-                    <div className="flex items-center gap-1.5 mt-1.5">
-                      <div className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                      <span className="text-[10px] text-emerald-400 font-medium">Key configured</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5 mt-1.5">
-                      <div className="h-1.5 w-1.5 rounded-full bg-td-muted/50" />
-                      <span className="text-[10px] text-td-muted">No key set</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Custom model for Anthropic direct */}
-                {apiProvider === 'anthropic' && (
-                  <div>
-                    <label className="text-[10px] font-medium text-td-muted uppercase tracking-wider mb-1.5 block">
-                      Custom Model <span className="normal-case tracking-normal font-normal">(optional)</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={customModel}
-                      onChange={(e) => onCustomModelChange(e.target.value)}
-                      placeholder="claude-sonnet-4-20250514"
-                      className="w-full bg-td-bg border border-td-border rounded-lg px-3 py-2 text-xs text-td-text placeholder-td-muted/50 outline-none focus:border-td-accent/50 focus:ring-1 focus:ring-td-accent/20 transition-all font-mono"
-                    />
-                    <div className="text-[10px] text-td-muted mt-1">
-                      Overrides model selection above
-                    </div>
-                  </div>
+        {/* Model cards */}
+        <div className="p-3 pb-2">
+          <div className="text-[11px] font-medium text-td-muted uppercase tracking-wider mb-2">Model</div>
+          <div className="space-y-1">
+            {MODEL_INFO.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => { onModelChange(m.id); onCustomModelChange('') }}
+                className={cn(
+                  'w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-all',
+                  selectedModel === m.id && !customModel
+                    ? 'bg-td-accent/10 border border-td-accent/30'
+                    : 'hover:bg-td-hover border border-transparent'
                 )}
-              </div>
-            </TabsContent>
-          </Tabs>
+              >
+                <div className={cn(
+                  'h-7 w-7 rounded-lg flex items-center justify-center shrink-0',
+                  selectedModel === m.id && !customModel ? 'bg-td-accent/20' : 'bg-td-bg'
+                )}>
+                  {selectedModel === m.id && !customModel
+                    ? <CircleCheck className="h-3.5 w-3.5 text-td-accent" />
+                    : <Cpu className="h-3.5 w-3.5 text-td-muted" />
+                  }
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className={cn('text-xs font-medium', selectedModel === m.id && !customModel ? 'text-td-text' : 'text-td-text-secondary')}>
+                      {m.label}
+                    </span>
+                    {m.badge && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-orange-500/15 text-orange-400 font-medium">
+                        {m.badge}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-td-muted">{m.description}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="h-px bg-td-border" />
+
+        {/* ACP authentication info */}
+        <div className="p-3">
+          <div className="flex items-center gap-2 rounded-lg bg-td-bg px-3 py-2.5">
+            <div className="h-6 w-6 rounded-full bg-emerald-500/15 flex items-center justify-center">
+              <CircleCheck className="h-3 w-3 text-emerald-400" />
+            </div>
+            <div>
+              <div className="text-xs text-td-text font-medium">Using Claude CLI authentication</div>
+              <div className="text-[10px] text-td-muted">Your subscription plan applies</div>
+            </div>
+          </div>
         </div>
       </PopoverContent>
     </Popover>
@@ -527,7 +436,8 @@ function InputBar({
   disabledTools, onToggleTool, onArchiveConversation,
   useWorktree, onUseWorktreeChange, onShowUsage,
   apiMode, onApiModeChange, apiProvider, onApiProviderChange,
-  apiKey, onApiKeyChange, customModel, onCustomModelChange
+  apiKey, onApiKeyChange, customModel, onCustomModelChange,
+  contextTokens
 }: InputBarProps): JSX.Element {
   const [text, setText] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
@@ -697,6 +607,20 @@ function InputBar({
       icon: <RefreshCw className="h-3.5 w-3.5 text-teal-400" />,
       category: 'automation' as SlashCategory,
       action: () => onSend('Please review the recently changed code for reuse opportunities, quality issues, and efficiency improvements, then fix any issues you find.')
+    },
+    {
+      name: 'btw',
+      description: 'Add context or a follow-up instruction',
+      icon: <HelpCircle className="h-3.5 w-3.5 text-violet-400" />,
+      category: 'automation' as SlashCategory,
+      action: (arg) => {
+        if (arg) {
+          onSend(`By the way: ${arg}`)
+        } else {
+          setStatusMsg('Usage: /btw <context> — adds context to the conversation')
+          setTimeout(() => setStatusMsg(null), 4000)
+        }
+      }
     },
     {
       name: 'bug',
@@ -1253,6 +1177,52 @@ function InputBar({
                       <span>{queueLength} queued</span>
                     </div>
                   )}
+
+                  {/* Context usage indicator */}
+                  {contextTokens > 0 && (() => {
+                    const ctx = getContextStatus(contextTokens, selectedModel)
+                    // Only show when above 50%
+                    if (ctx.level === 'ok') return null
+                    return (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className={cn('flex items-center gap-1 text-xs px-2 cursor-default', ctx.color)}>
+                            {ctx.level === 'critical' ? (
+                              <AlertTriangle className="h-3 w-3" />
+                            ) : (
+                              <Gauge className="h-3 w-3" />
+                            )}
+                            <div className="flex items-center gap-1">
+                              <span>{Math.round(ctx.percent)}%</span>
+                              <div className="w-12 h-1.5 rounded-full bg-td-border overflow-hidden">
+                                <div
+                                  className={cn(
+                                    'h-full rounded-full transition-all',
+                                    ctx.level === 'critical' ? 'bg-red-400' :
+                                    ctx.level === 'warning' ? 'bg-orange-400' :
+                                    'bg-yellow-400'
+                                  )}
+                                  style={{ width: `${ctx.percent}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top">
+                          <div className="text-xs">
+                            <p className="font-medium">{ctx.label}</p>
+                            <p className="text-td-muted">{formatContext(contextTokens)} / {formatContext(MODEL_CONTEXT_LIMITS[selectedModel] || 200_000)} tokens</p>
+                            {ctx.level === 'critical' && (
+                              <p className="text-red-400 mt-1">Context nearly full — start a new chat to avoid issues</p>
+                            )}
+                            {ctx.level === 'warning' && (
+                              <p className="text-orange-400 mt-1">Consider starting a new chat soon</p>
+                            )}
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    )
+                  })()}
                 </div>
 
                 {/* Submit / Stop */}

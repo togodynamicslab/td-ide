@@ -5,6 +5,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { spawn, ChildProcess, execSync } from 'child_process'
 import * as pty from 'node-pty'
 import { getMcpServers, getGlobalMcpServers, getMarketplacePlugins, setMcpServer, removeMcpServer } from './mcp'
+import { AcpClientManager } from './acp-client'
 import {
   initDatabase,
   closeDatabase,
@@ -37,8 +38,8 @@ import {
 
 let mainWindow: BrowserWindow | null = null
 
-// Parallel claude processes — one per conversation
-const claudeProcesses = new Map<string, ChildProcess>()
+// ACP client manager — single long-lived connection multiplexing all conversations
+let acpManager: AcpClientManager
 
 // Terminal PTY processes — one per terminal tab
 const ptyProcesses = new Map<string, pty.IPty>()
@@ -184,18 +185,28 @@ ipcMain.handle('db:delete-archived-conversations', (_event, { projectId }: { pro
   return true
 })
 
-ipcMain.handle('db:generate-title', async (_event, { conversationId, userMessage }: { conversationId: string; userMessage: string }) => {
-  if (isConversationTitleEdited(conversationId)) return null
+ipcMain.handle('db:generate-title', async (_event, { conversationId, userMessage, assistantMessage }: { conversationId: string; userMessage: string; assistantMessage?: string }) => {
+  console.log('[td-ide] generate-title called | conv:', conversationId, '| userMsg:', userMessage?.slice(0, 80), '| assistantMsg:', assistantMessage?.slice(0, 80))
+  if (isConversationTitleEdited(conversationId)) {
+    console.log('[td-ide] generate-title SKIPPED — title was manually edited')
+    return null
+  }
 
   try {
-    const prompt = `Generate a very short title (max 6 words, no quotes) for a conversation that starts with this message:\n\n${userMessage.slice(0, 500)}`
+    let context = `User: ${userMessage.slice(0, 400)}`
+    if (assistantMessage) {
+      context += `\n\nAssistant: ${assistantMessage.slice(0, 400)}`
+    }
+    const prompt = `Generate a very short title (2-4 words, no quotes, no punctuation) for this coding conversation. Examples: "Stream Fix", "Auth Refactor", "API Provider Setup". Reply with ONLY the title, nothing else.\n\n${context}`
     const raw = await new Promise<string>((resolve, reject) => {
       let output = ''
-      const proc = spawn('claude', ['-p', prompt, '--model', 'haiku', '--output-format', 'text'], {
+      const proc = spawn('claude', ['-p', '--model', 'haiku', '--output-format', 'text'], {
         shell: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env }
       })
+      proc.stdin?.write(prompt)
+      proc.stdin?.end()
       proc.stdout!.on('data', (chunk: Buffer) => { output += chunk.toString() })
       proc.on('close', () => resolve(output.trim()))
       proc.on('error', reject)
@@ -213,12 +224,15 @@ ipcMain.handle('db:generate-title', async (_event, { conversationId, userMessage
     }
     // Strip ANSI codes and quotes
     title = title.replace(/\x1B\[[0-9;]*m/g, '').replace(/^["']|["']$/g, '').trim()
+    console.log('[td-ide] generate-title raw:', JSON.stringify(raw).slice(0, 200), '| cleaned:', title)
     if (title && title.length > 0 && title.length < 100) {
       updateConversationTitle(conversationId, title)
+      console.log('[td-ide] generate-title SUCCESS:', title)
       return title
     }
-  } catch {
-    // Title generation failed — not critical
+    console.log('[td-ide] generate-title REJECTED — empty or too long')
+  } catch (err) {
+    console.log('[td-ide] generate-title ERROR:', err)
   }
   return null
 })
@@ -239,9 +253,11 @@ ipcMain.handle('notify:generate-summary', async (_event, { assistantText, conver
     const raw = await new Promise<string>((resolve, reject) => {
       let stdout = ''
       let stderr = ''
-      const proc = spawn('claude', ['-p', prompt, '--model', 'haiku'], {
-        stdio: ['ignore', 'pipe', 'pipe']
+      const proc = spawn('claude', ['-p', '--model', 'haiku'], {
+        stdio: ['pipe', 'pipe', 'pipe']
       })
+      proc.stdin?.write(prompt)
+      proc.stdin?.end()
       proc.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
       proc.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
       proc.on('close', (code) => {
@@ -575,171 +591,86 @@ ipcMain.handle('process:kill-orphan', (_event, { pid }: { pid: number }) => {
 
 ipcMain.handle('process:get-memory-usage', () => {
   const mainMemory = process.memoryUsage()
-  const claudeProcs: { conversationId: string; rss: number }[] = []
-  for (const [convId, proc] of claudeProcesses) {
-    if (proc.pid) {
-      try {
-        const rss = parseInt(
-          require('child_process').execSync(`ps -o rss= -p ${proc.pid}`, { encoding: 'utf8' }).trim(),
-          10
-        ) * 1024 // ps reports in KB
-        claudeProcs.push({ conversationId: convId, rss })
-      } catch {
-        // Process may have exited
-      }
-    }
-  }
   return {
     main: { rss: mainMemory.rss, heapUsed: mainMemory.heapUsed, heapTotal: mainMemory.heapTotal },
-    claude: claudeProcs
+    claude: [] as { conversationId: string; rss: number }[]
   }
 })
 
-// --- Claude process management (parallel) ---
+// --- Claude ACP process management ---
 
-const PERMISSION_MAP: Record<string, string> = {
+// Map UI permission modes to ACP session mode IDs
+const ACP_MODE_MAP: Record<string, string> = {
   full: 'bypassPermissions',
-  default: 'default',
+  default: 'acceptEdits',
   plan: 'plan',
   approve: 'default'
 }
 
-function launchClaude(message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools: string[] = [], apiKey = '', apiProvider = 'anthropic'): void {
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
+ipcMain.on('claude:send-message', async (_event, { message, conversationId, cwd, permissionMode }) => {
+  try {
+    const existingSessionId = conversationId ? getConversationSessionId(conversationId) : null
+    const effectiveCwd = cwd || app.getPath('home')
 
-  if (model && model !== 'opus') args.push('--model', model)
-  if (effort && effort !== 'high') args.push('--effort', effort)
+    const acpModeId = ACP_MODE_MAP[permissionMode] || 'default'
+    console.log('[td-ide] Permission mode:', permissionMode, '-> ACP mode:', acpModeId)
 
-  const cliPermission = PERMISSION_MAP[permissionMode] || 'default'
-  args.push('--permission-mode', cliPermission)
-
-  if (disabledTools.length > 0) {
-    args.push('--disallowedTools', ...disabledTools)
-  }
-
-  // Look up session ID from DB for conversation resumption
-  const existingSessionId = conversationId ? getConversationSessionId(conversationId) : null
-  if (existingSessionId) {
-    args.push('--resume', existingSessionId)
-  }
-
-  console.log('[td-ide] conv:', conversationId, '| resume:', existingSessionId || 'new', '| provider:', apiProvider)
-
-  // Build env with API key if using API key mode
-  const env = { ...process.env }
-  if (apiKey) {
-    if (apiProvider === 'openrouter') {
-      env.OPENROUTER_API_KEY = apiKey
-    } else {
-      env.ANTHROPIC_API_KEY = apiKey
-    }
-  }
-
-  const proc = spawn('claude', args, {
-    cwd: cwd || app.getPath('home'),
-    shell: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env
-  })
-
-  claudeProcesses.set(conversationId, proc)
-
-  // Track PID for session recovery
-  if (proc.pid) {
-    registerActiveProcess(conversationId, proc.pid)
-  }
-
-  proc.stdin?.write(message)
-  proc.stdin?.end()
-
-  let buffer = ''
-
-  proc.stdout?.on('data', (data: Buffer) => {
-    buffer += data.toString()
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-
-    for (const line of lines) {
-      if (line.trim()) {
-        try {
-          const parsed = JSON.parse(line)
-
-          if (parsed.type === 'system' && parsed.subtype === 'init' && parsed.session_id) {
-            if (conversationId) {
-              updateConversationSessionId(conversationId, parsed.session_id)
-              console.log('[td-ide] session stored:', parsed.session_id)
-            }
-          }
-
-          if (parsed.type === 'result') {
-            console.log('[td-ide] RESULT event | conv:', conversationId, '| is_error:', parsed.is_error, '| subtype:', parsed.subtype, '| num_turns:', parsed.num_turns)
-          } else {
-            console.log('[td-ide] stream |', parsed.type, parsed.subtype || '')
-          }
-          sendToRenderer('claude:stream', { conversationId, data: parsed })
-        } catch {
-          // non-JSON output, ignore
-        }
-      }
-    }
-  })
-
-  proc.stderr?.on('data', (data: Buffer) => {
-    const text = data.toString().trim()
-    if (!text) return
-    // Filter out ANSI escape sequences and common non-error stderr output
-    const cleaned = text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim()
-    if (!cleaned) return
-    // Only forward actual errors, not progress/status chatter
-    const isNoise = /^(Compiling|Bundling|Building|Watching|Done in|✓|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|\s*$)/.test(cleaned)
-    if (isNoise) return
-    console.log('[td-ide] stderr:', cleaned.slice(0, 200))
-    sendToRenderer('claude:error', { conversationId, error: cleaned })
-  })
-
-  proc.on('close', (code) => {
-    if (buffer.trim()) {
+    let sessionId: string
+    if (existingSessionId) {
       try {
-        const parsed = JSON.parse(buffer)
-        sendToRenderer('claude:stream', { conversationId, data: parsed })
+        await acpManager.resumeSession(conversationId, existingSessionId, effectiveCwd)
+        sessionId = existingSessionId
       } catch {
-        // ignore
+        // Resume failed — create new session with permission mode baked in
+        sessionId = await acpManager.newSession(conversationId, effectiveCwd, acpModeId)
+        updateConversationSessionId(conversationId, sessionId)
       }
+    } else {
+      sessionId = await acpManager.newSession(conversationId, effectiveCwd, acpModeId)
+      updateConversationSessionId(conversationId, sessionId)
     }
-    console.log('[td-ide] closed | conv:', conversationId, '| code:', code)
-    sendToRenderer('claude:done', { conversationId, code })
-    claudeProcesses.delete(conversationId)
-    removeActiveProcess(conversationId)
-  })
 
-  proc.on('error', (err) => {
-    sendToRenderer('claude:error', { conversationId, error: `Failed to start claude: ${err.message}` })
-    sendToRenderer('claude:done', { conversationId, code: 1 })
-    claudeProcesses.delete(conversationId)
-    removeActiveProcess(conversationId)
-  })
-}
+    // Also set mode after session creation/resume to ensure it's applied
+    try {
+      await acpManager.setMode(conversationId, acpModeId)
+      console.log('[td-ide] setMode succeeded for', acpModeId)
+    } catch (err) {
+      console.warn('[td-ide:acp] setMode failed:', (err as Error).message)
+    }
 
-ipcMain.on('claude:send-message', (_event, { message, conversationId, cwd, model, effort, permissionMode, disabledTools, apiKey, apiProvider }) => {
-  const existing = claudeProcesses.get(conversationId)
-  if (existing && !existing.killed) {
-    existing.once('close', () => {
-      launchClaude(message, conversationId, cwd, model, effort, permissionMode, disabledTools, apiKey, apiProvider)
+    const response = await acpManager.prompt(conversationId, message)
+
+    // Send the prompt response (stop reason, usage) as a final stream event
+    sendToRenderer('claude:stream', {
+      conversationId,
+      data: {
+        sessionUpdate: 'prompt_complete',
+        stopReason: response.stopReason,
+        usage: response.usage
+      }
     })
-    existing.kill()
-  } else {
-    launchClaude(message, conversationId, cwd, model, effort, permissionMode, disabledTools, apiKey, apiProvider)
+
+    sendToRenderer('claude:done', { conversationId })
+  } catch (err) {
+    const errMsg = (err as Error).message || String(err)
+    console.error('[td-ide:acp] Error in send-message:', errMsg)
+    sendToRenderer('claude:error', { conversationId, error: errMsg })
+    sendToRenderer('claude:done', { conversationId, code: 1 })
   }
 })
 
-ipcMain.on('claude:cancel', (_event, { conversationId }) => {
-  const proc = claudeProcesses.get(conversationId)
-  if (proc) {
-    proc.kill()
-    claudeProcesses.delete(conversationId)
-    removeActiveProcess(conversationId)
-    sendToRenderer('claude:done', { conversationId, code: -1, cancelled: true })
+ipcMain.on('claude:cancel', async (_event, { conversationId }) => {
+  try {
+    await acpManager.cancel(conversationId)
+  } catch (err) {
+    console.error('[td-ide:acp] Cancel error:', (err as Error).message)
   }
+  sendToRenderer('claude:done', { conversationId, code: -1, cancelled: true })
+})
+
+// Permission response from renderer
+ipcMain.on('claude:permission-response', (_event, { requestId, optionId }: { requestId: string; optionId: string }) => {
+  acpManager.resolvePermission(requestId, optionId)
 })
 
 // --- Terminal PTY handlers ---
@@ -804,9 +735,18 @@ ipcMain.handle('terminal:close', (_event, { id }: { id: string }) => {
 
 // --- App lifecycle ---
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.td-ide')
   initDatabase()
+
+  // Initialize ACP client manager
+  acpManager = new AcpClientManager(sendToRenderer)
+  try {
+    await acpManager.initialize()
+    console.log('[td-ide] ACP client initialized')
+  } catch (err) {
+    console.error('[td-ide] ACP init failed, will retry on first message:', (err as Error).message)
+  }
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -820,15 +760,10 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  // Kill all running claude processes
-  for (const [, proc] of claudeProcesses) {
-    proc.kill()
-  }
-  claudeProcesses.clear()
+  // Shutdown ACP agent
+  acpManager?.shutdown()
   // Kill all terminal PTY processes
-  for (const [, proc] of ptyProcesses) {
-    proc.kill()
-  }
+  ptyProcesses.forEach((proc) => proc.kill())
   ptyProcesses.clear()
   closeDatabase()
   if (process.platform !== 'darwin') {

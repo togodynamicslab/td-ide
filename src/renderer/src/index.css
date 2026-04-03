@@ -92,6 +92,25 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* Shimmer effect for thinking/reasoning */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shimmer-thinking {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(168, 85, 247, 0.06) 25%,
+    rgba(168, 85, 247, 0.12) 50%,
+    rgba(168, 85, 247, 0.06) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s ease-in-out infinite;
+}
+
 /* Markdown image rendering */
 .break-words img {
   max-width: 100%;

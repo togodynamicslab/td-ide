@@ -8,12 +8,23 @@ const api = {
   windowClose: () => ipcRenderer.send('window:close'),
   windowIsMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
 
-  // Claude process
-  sendMessage: (message: string, conversationId: string, cwd: string, model: string, effort: string, permissionMode: string, disabledTools: string[] = [], apiKey = '', apiProvider = 'anthropic') => {
-    ipcRenderer.send('claude:send-message', { message, conversationId, cwd, model, effort, permissionMode, disabledTools, apiKey, apiProvider })
+  // Claude process (ACP)
+  sendMessage: (message: string, conversationId: string, cwd: string, permissionMode = 'default') => {
+    ipcRenderer.send('claude:send-message', { message, conversationId, cwd, permissionMode })
   },
   cancelMessage: (conversationId: string) => {
     ipcRenderer.send('claude:cancel', { conversationId })
+  },
+
+  // Permission handling (ACP)
+  onPermissionRequest: (callback: (data: { conversationId: string; requestId: string; toolCall: unknown; options: unknown[] }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { conversationId: string; requestId: string; toolCall: unknown; options: unknown[] }) =>
+      callback(payload)
+    ipcRenderer.on('claude:permission-request', handler)
+    return () => ipcRenderer.removeListener('claude:permission-request', handler)
+  },
+  respondToPermission: (requestId: string, optionId: string) => {
+    ipcRenderer.send('claude:permission-response', { requestId, optionId })
   },
 
   // Dialog / files
@@ -118,8 +129,8 @@ const api = {
   archiveConversation: (id: string, archived: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('db:archive-conversation', { id, archived })
   },
-  generateTitle: (conversationId: string, userMessage: string): Promise<string | null> => {
-    return ipcRenderer.invoke('db:generate-title', { conversationId, userMessage })
+  generateTitle: (conversationId: string, userMessage: string, assistantMessage?: string): Promise<string | null> => {
+    return ipcRenderer.invoke('db:generate-title', { conversationId, userMessage, assistantMessage })
   },
   setConversationWorktree: (id: string, worktreePath: string | null): Promise<boolean> => {
     return ipcRenderer.invoke('db:set-conversation-worktree', { id, worktreePath })
