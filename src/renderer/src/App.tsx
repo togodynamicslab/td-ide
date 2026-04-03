@@ -1299,7 +1299,7 @@ function App(): JSX.Element {
               }}
             />
             {/* Context exhaustion warning */}
-            {activeConversationId && (contextTokensMap.get(activeConversationId) || 0) >= 180_000 && (
+            {activeConversationId && (contextTokensMap.get(activeConversationId) || 0) >= 900_000 && (
               <div className="mx-2 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center gap-3 text-xs">
                 <span className="text-red-400 font-medium shrink-0">Context nearly full</span>
                 <span className="text-td-muted">This conversation is approaching the context limit. Responses may degrade or the session may stop.</span>

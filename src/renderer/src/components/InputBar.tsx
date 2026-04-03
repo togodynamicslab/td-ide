@@ -168,7 +168,7 @@ function formatContext(tokens: number): string {
 
 // Context window limits per model (tokens)
 const MODEL_CONTEXT_LIMITS: Record<string, number> = {
-  opus: 200_000,
+  opus: 1_000_000,
   sonnet: 200_000,
   haiku: 200_000
 }
@@ -474,7 +474,7 @@ function InputBar({
       description: 'Summarize conversation to save context',
       icon: <Minimize2 className="h-3.5 w-3.5 text-purple-400" />,
       category: 'chat' as SlashCategory,
-      action: () => onSend('/compact — Please provide a concise summary of our conversation so far, then we can continue from that summary.')
+      action: () => onSend('/compact')
     },
     {
       name: 'archive',
