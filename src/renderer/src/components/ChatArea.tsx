@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Code2, Loader2, Map, CheckCircle2, AlertTriangle, X, RotateCcw } from 'lucide-react'
+import { CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Markdown, Reasoning } from './ai-elements'
 import InlineToolCall from './InlineToolCall'
@@ -29,7 +29,7 @@ function ChatArea({ messages, isLoading, permissionMode, contentFontSize = 14, o
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastSnapshotRef = useRef('')
   const prevMsgCount = useRef(0)
-  const thinkingVerb = useThinkingVerb(isLoading)
+  const { text: thinkingVerb, cycleKey } = useThinkingVerb(isLoading)
 
   // Scroll to bottom on initial load (messages populated from DB)
   useEffect(() => {
@@ -72,21 +72,11 @@ function ChatArea({ messages, isLoading, permissionMode, contentFontSize = 14, o
   if (messages.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-td-muted">
-        <div className="text-center">
-          {permissionMode === 'plan' ? (
-            <Map className="h-12 w-12 mx-auto mb-4 text-blue-400/20" />
-          ) : (
-            <Code2 className="h-12 w-12 mx-auto mb-4 opacity-20" />
-          )}
-          <p className="text-lg">
-            {permissionMode === 'plan' ? 'Plan mode' : 'Start a conversation'}
-          </p>
-          <p className="text-sm mt-1 text-td-muted">
-            {permissionMode === 'plan'
-              ? 'Claude will analyze and plan without making changes'
-              : 'Ask anything or describe what you want to build'}
-          </p>
-        </div>
+        <p className="text-sm">
+          {permissionMode === 'plan'
+            ? 'Plan mode — Claude will analyze without making changes'
+            : 'Select a chat or create a new one to get started.'}
+        </p>
       </div>
     )
   }
@@ -155,6 +145,7 @@ function ChatArea({ messages, isLoading, permissionMode, contentFontSize = 14, o
                                 content={block.thinking}
                                 isStreaming={isAssistantLoading && isLastBlock}
                                 thinkingVerb={thinkingVerb}
+                                verbCycleKey={cycleKey}
                               />
                             )
                             i++
@@ -200,19 +191,17 @@ function ChatArea({ messages, isLoading, permissionMode, contentFontSize = 14, o
 
                   {/* Loading indicator — only when no blocks at all yet */}
                   {isAssistantLoading && !hasAnyContent && (
-                    <div className="flex items-center gap-2 text-sm text-td-muted py-2">
-                      <Loader2 className="h-4 w-4 animate-spin text-[#D97757]" />
-                      <span className="animate-pulse">
-                        {thinkingVerb}...
-                      </span>
+                    <div className="flex items-center gap-2.5 text-sm text-td-muted pt-5 pb-2">
+                      <div className="thinking-orb" />
+                      <span key={cycleKey} className="blur-transition">{thinkingVerb}...</span>
                     </div>
                   )}
 
                   {/* Working indicator — has tool blocks but no text yet */}
                   {isAssistantLoading && hasAnyContent && !isLastBlockThinking && lastBlock?.type === 'tool_use' && (
-                    <div className="flex items-center gap-2 text-sm text-td-muted py-1 mt-1">
-                      <Loader2 className="h-3 w-3 animate-spin text-[#D97757]" />
-                      <span>{thinkingVerb}...</span>
+                    <div className="flex items-center gap-2.5 text-sm text-td-muted py-1 mt-4">
+                      <div className="thinking-orb" />
+                      <span key={cycleKey} className="blur-transition">{thinkingVerb}...</span>
                     </div>
                   )}
 

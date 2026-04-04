@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
-import { Map as MapIcon, Pencil, Eye, Play, X, Copy, Check, Circle, Loader2, CheckCircle2 } from 'lucide-react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { Map as MapIcon, Pencil, Eye, Play, X, Copy, Check, Circle, Loader2, CheckCircle2, ThumbsUp, ThumbsDown } from 'lucide-react'
 import { Button } from './ui/button'
 import { Markdown } from './ai-elements'
 import { cn } from '@/lib/utils'
@@ -12,6 +12,9 @@ interface PlanSidebarProps {
   onExecutePlan: (plan: string) => void
   onClose: () => void
   isStreaming: boolean
+  pendingApproval?: { requestId: string; conversationId: string } | null
+  onApprovePlan?: () => void
+  onRejectPlan?: () => void
 }
 
 const STATUS_CONFIG: Record<PlanEntryStatus, { icon: typeof Circle; color: string; label: string }> = {
@@ -60,10 +63,34 @@ function PlanEntryRow({ entry }: { entry: PlanEntry }): JSX.Element {
   )
 }
 
-function PlanSidebar({ planContent, planEntries, onPlanChange, onExecutePlan, onClose, isStreaming }: PlanSidebarProps): JSX.Element {
+function PlanSidebar({ planContent, planEntries, onPlanChange, onExecutePlan, onClose, isStreaming, pendingApproval, onApprovePlan, onRejectPlan }: PlanSidebarProps): JSX.Element {
   const [mode, setMode] = useState<'preview' | 'edit'>('preview')
   const [copied, setCopied] = useState(false)
+  const [width, setWidth] = useState(420)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const startX = useRef(0)
+  const startWidth = useRef(0)
+
+  const handleResizePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    startX.current = e.clientX
+    startWidth.current = width
+
+    const onMove = (ev: PointerEvent) => {
+      const delta = startX.current - ev.clientX
+      setWidth(Math.min(Math.max(startWidth.current + delta, 320), 800))
+    }
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
+  }, [width])
 
   const hasEntries = planEntries.length > 0
   const { completedCount, totalCount } = useMemo(() => ({
@@ -103,8 +130,12 @@ function PlanSidebar({ planContent, planEntries, onPlanChange, onExecutePlan, on
   }
 
   return (
-    <div className="w-[420px] min-w-[320px] max-w-[600px] border-l border-td-border bg-td-bg flex flex-col">
-      {/* Header */}
+    <div className="relative h-full border-l border-td-border bg-td-bg flex flex-col shrink-0" style={{ width }}>
+      {/* Resize handle */}
+      <div
+        onPointerDown={handleResizePointerDown}
+        className="absolute top-0 bottom-0 left-0 w-1 cursor-col-resize z-20 hover:bg-td-accent/50 transition-colors"
+      />
       <div className="flex items-center justify-between px-4 py-2 border-b border-td-border">
         <div className="flex items-center gap-2">
           <MapIcon className="h-4 w-4 text-blue-400" />
@@ -114,7 +145,12 @@ function PlanSidebar({ planContent, planEntries, onPlanChange, onExecutePlan, on
               streaming...
             </span>
           )}
-          {hasEntries && !isStreaming && (
+          {pendingApproval && !isStreaming && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">
+              awaiting approval
+            </span>
+          )}
+          {hasEntries && !isStreaming && !pendingApproval && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-td-muted/15 text-td-muted">
               {completedCount}/{totalCount}
             </span>
@@ -145,7 +181,7 @@ function PlanSidebar({ planContent, planEntries, onPlanChange, onExecutePlan, on
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className={cn('overflow-y-auto', mode === 'edit' ? 'flex-1' : 'min-h-0')}>
         {!planContent && !hasEntries && !isStreaming ? (
           <div className="flex items-center justify-center h-full text-td-muted">
             <div className="text-center px-6">
@@ -155,7 +191,6 @@ function PlanSidebar({ planContent, planEntries, onPlanChange, onExecutePlan, on
             </div>
           </div>
         ) : hasEntries ? (
-          // Structured plan entries
           <div className="py-1">
             {planEntries.map((entry, i) => (
               <PlanEntryRow key={`${entry.status}-${entry.content}`} entry={entry} />
@@ -176,20 +211,55 @@ function PlanSidebar({ planContent, planEntries, onPlanChange, onExecutePlan, on
         )}
       </div>
 
-      {/* Footer — execute action */}
-      {(planContent.trim() || hasEntries) && !isStreaming && (
+      {/* Footer — approve/reject shown immediately when pending, execute only after streaming */}
+      {(planContent.trim() || hasEntries) && (pendingApproval || !isStreaming) && (
         <div className="border-t border-td-border px-4 py-2.5">
-          <Button
-            size="sm"
-            className="w-full gap-2 bg-blue-600 hover:bg-blue-500 text-white"
-            onClick={handleExecute}
-          >
-            <Play className="h-3.5 w-3.5" />
-            Execute Plan
-          </Button>
-          <p className="text-[10px] text-td-muted text-center mt-1.5">
-            Sends this plan to Claude in full access mode
-          </p>
+          {pendingApproval ? (
+            <>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="flex-1 gap-2 text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                  onClick={onRejectPlan}
+                >
+                  <ThumbsDown className="h-3.5 w-3.5" />
+                  Reject
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="flex-1 gap-2 text-td-muted hover:text-td-text"
+                  onClick={() => setMode('edit')}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Edit
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1 gap-2 bg-emerald-600 hover:bg-emerald-500 text-white"
+                  onClick={onApprovePlan}
+                >
+                  <ThumbsUp className="h-3.5 w-3.5" />
+                  Approve
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                className="w-full gap-2 bg-blue-600 hover:bg-blue-500 text-white"
+                onClick={handleExecute}
+              >
+                <Play className="h-3.5 w-3.5" />
+                Execute Plan
+              </Button>
+              <p className="text-[10px] text-td-muted text-center mt-1.5">
+                Sends this plan to Claude in full access mode
+              </p>
+            </>
+          )}
         </div>
       )}
     </div>

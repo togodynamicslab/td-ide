@@ -1,4 +1,4 @@
-import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { CheckCircle2, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getToolMeta, normalizeToolName } from '@/lib/tool-meta'
 import type { ToolBlock } from '../App'
@@ -94,7 +94,7 @@ export default function InlineToolCall({ tool, isActive = false, onToolClick }: 
       onClick={() => onToolClick?.(tool)}
     >
       {isActive ? (
-        <Loader2 className="h-3 w-3 text-td-accent animate-spin shrink-0" />
+        <div className="thinking-orb" style={{ width: 12, height: 12 }} />
       ) : isFailed ? (
         <XCircle className="h-3 w-3 text-red-400 shrink-0" />
       ) : isComplete ? (
@@ -104,8 +104,9 @@ export default function InlineToolCall({ tool, isActive = false, onToolClick }: 
       )}
       <span className={cn(
         'shrink-0',
+        isActive && 'blur-transition',
         isFailed ? 'text-red-400' : isActive ? 'text-td-text' : 'text-td-text-secondary'
-      )}>
+      )} key={statusLabel}>
         {statusLabel}
       </span>
       {detail && (

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 
 const THINKING_VERBS = [
   'Accomplishing', 'Actioning', 'Actualizing', 'Architecting', 'Baking', 'Beaming',
@@ -35,22 +35,84 @@ const THINKING_VERBS = [
   'Whisking', 'Wibbling', 'Working', 'Wrangling', 'Zesting', 'Zigzagging',
 ]
 
-function pickRandom(): string {
-  return THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)]
+function pickRandom(exclude?: string): string {
+  let verb: string
+  do {
+    verb = THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)]
+  } while (verb === exclude && THINKING_VERBS.length > 1)
+  return verb
 }
 
+const CHAR_INTERVAL = 50        // ms per character when typing in
+const CYCLES = 3                // number of verb switches before settling
+const PAUSE_BETWEEN = 3200      // ms to hold the fully typed verb before switching
+
 /**
- * Returns a single random thinking verb, picked fresh each time `active`
- * transitions from false → true. Stays fixed for the entire loading session.
+ * Returns a thinking verb that streams in character-by-character.
+ * On activation, cycles through a few random verbs with a typewriter effect,
+ * then settles on the last one.
  */
-export function useThinkingVerb(active: boolean): string {
-  const [verb, setVerb] = useState(pickRandom)
+export function useThinkingVerb(active: boolean): { text: string; cycleKey: number } {
+  const [display, setDisplay] = useState(() => pickRandom())
+  const [cycleKey, setCycleKey] = useState(0)
+  const cycleRef = useRef(0)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const rafRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearTimers = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    if (rafRef.current) clearTimeout(rafRef.current)
+    timerRef.current = null
+    rafRef.current = null
+  }, [])
+
+  const streamIn = useCallback((word: string, onDone: () => void) => {
+    let i = 0
+    const tick = () => {
+      i++
+      setDisplay(word.slice(0, i))
+      if (i < word.length) {
+        rafRef.current = setTimeout(tick, CHAR_INTERVAL)
+      } else {
+        onDone()
+      }
+    }
+    setDisplay('')
+    rafRef.current = setTimeout(tick, CHAR_INTERVAL)
+  }, [])
 
   useEffect(() => {
-    if (active) {
-      setVerb(pickRandom())
+    if (!active) {
+      clearTimers()
+      cycleRef.current = 0
+      return
     }
-  }, [active])
 
-  return verb
+    let cancelled = false
+    let prevVerb = ''
+
+    const nextCycle = () => {
+      if (cancelled) return
+      const verb = pickRandom(prevVerb)
+      prevVerb = verb
+      cycleRef.current++
+
+      setCycleKey(cycleRef.current)
+      streamIn(verb, () => {
+        if (cancelled) return
+        if (cycleRef.current < CYCLES) {
+          timerRef.current = setTimeout(nextCycle, PAUSE_BETWEEN)
+        }
+      })
+    }
+
+    nextCycle()
+
+    return () => {
+      cancelled = true
+      clearTimers()
+    }
+  }, [active, streamIn, clearTimers])
+
+  return { text: display, cycleKey }
 }

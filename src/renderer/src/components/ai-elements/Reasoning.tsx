@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
-import { Brain } from 'lucide-react'
+import { Brain, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface ReasoningProps {
   content: string
   isStreaming?: boolean
   thinkingVerb?: string
+  verbCycleKey?: number
   className?: string
 }
 
@@ -13,6 +14,7 @@ export default function Reasoning({
   content,
   isStreaming = false,
   thinkingVerb,
+  verbCycleKey,
   className
 }: ReasoningProps): JSX.Element {
   const [open, setOpen] = useState(isStreaming)
@@ -38,18 +40,24 @@ export default function Reasoning({
         onClick={() => setOpen(!open)}
         className={cn(
           'flex items-center gap-2 text-xs py-1.5 px-0.5 w-full text-left transition-colors rounded',
-          'hover:bg-td-hover/50',
-          isStreaming && 'shimmer-thinking'
+          'hover:bg-td-hover/50'
         )}
       >
-        <Brain className={cn(
-          'h-3.5 w-3.5 shrink-0',
-          isStreaming ? 'text-purple-400' : 'text-purple-400/50'
-        )} />
-        <span className={cn(
-          'font-medium',
-          isStreaming ? 'text-td-text-secondary' : 'text-td-text-tertiary'
-        )}>
+        {isStreaming ? (
+          <div className="thinking-orb" />
+        ) : (
+          <ChevronRight className={cn(
+            'h-3 w-3 shrink-0 text-td-muted transition-transform duration-200',
+            open && 'rotate-90'
+          )} />
+        )}
+        <span
+          key={isStreaming ? verbCycleKey : 'done'}
+          className={cn(
+            'font-medium',
+            isStreaming ? 'text-td-text-secondary blur-transition' : 'text-td-text-tertiary'
+          )}
+        >
           {isStreaming ? `${thinkingVerb || 'Thinking'}...` : 'Thought'}
         </span>
         {!isStreaming && (

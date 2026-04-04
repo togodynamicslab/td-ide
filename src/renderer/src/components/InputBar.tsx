@@ -852,7 +852,7 @@ function InputBar({
       icon: <Keyboard className="h-3.5 w-3.5 text-td-muted" />,
       category: 'info' as SlashCategory,
       action: () => {
-        setStatusMsg('Ctrl+B: Toggle sidebar  |  Ctrl+Enter: Send  |  /: Commands  |  Esc: Close menu')
+        setStatusMsg('⌘B: Sidebar  |  ⌘N: New chat  |  ⌘1-9: Switch tab  |  ⌘,: Settings  |  /: Commands')
         setTimeout(() => setStatusMsg(null), 5000)
       }
     },

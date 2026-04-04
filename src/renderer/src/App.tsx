@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import AppSidebar from './components/Sidebar'
-import { SidebarProvider } from './components/ui/sidebar'
+import { SidebarProvider, useSidebar } from './components/ui/sidebar'
 import TopBar from './components/TopBar'
 import ChatArea from './components/ChatArea'
 import InputBar from './components/InputBar'
@@ -15,6 +15,7 @@ import type { DiffViewData } from './components/ApprovalWidget'
 import DiffSidebar from './components/DiffSidebar'
 import ToolDetailSidebar from './components/ToolDetailSidebar'
 import ConversationTabs from './components/ConversationTabs'
+import { useKeyboardShortcuts, mergeShortcuts, DEFAULT_SHORTCUTS, type ShortcutBinding, type ShortcutModifiers } from './hooks/useKeyboardShortcuts'
 
 export interface ToolBlock {
   id: string
@@ -78,6 +79,9 @@ export interface PlanEntry {
   priority: PlanEntryPriority
 }
 
+// ACP title for ExitPlanMode — handled by Plan Sidebar, hidden from chat
+const EXIT_PLAN_MODE_TITLE = 'Ready to code?'
+
 export interface ModelUsageEntry {
   model: string
   inputTokens: number
@@ -115,6 +119,12 @@ interface StreamBuffer {
   permissionMode: PermissionMode
 }
 
+function SidebarToggleBridge({ toggleRef }: { toggleRef: { current: (() => void) | null } }): null {
+  const { toggleSidebar } = useSidebar()
+  useEffect(() => { toggleRef.current = toggleSidebar }, [toggleSidebar, toggleRef])
+  return null
+}
+
 function App(): JSX.Element {
   const [projects, setProjects] = useState<Project[]>([])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
@@ -143,6 +153,7 @@ function App(): JSX.Element {
   const [gitBranch, setGitBranch] = useState<string | null>(null)
   const [gitDiffStats, setGitDiffStats] = useState<{ additions: number; deletions: number }>({ additions: 0, deletions: 0 })
   const [settingsOpen, setSettingsOpen] = useState<false | 'global' | 'project'>(false)
+  const [customShortcuts, setCustomShortcuts] = useState<ShortcutBinding[] | null>(null)
   const [settingsProject, setSettingsProject] = useState<Project | null>(null)
   const [homedir, setHomedir] = useState('')
   const [planSidebarOpen, _setPlanSidebarOpen] = useState(false)
@@ -203,7 +214,7 @@ function App(): JSX.Element {
   )
   const isLoading = activeConversationId ? loadingConvs.has(activeConversationId) : false
 
-  // Per-conversation permission mode (defaults to 'approve')
+  // Per-conversation permission mode (defaults to 'approve'), persisted across restarts
   const permissionMode: PermissionMode = activeConversationId
     ? (perConvPermission.get(activeConversationId) || 'approve')
     : (perConvPermission.get('__new__') || 'approve')
@@ -212,6 +223,10 @@ function App(): JSX.Element {
     setPerConvPermission((prev) => {
       const next = new Map(prev)
       next.set(key, mode)
+      // Persist to app state
+      const obj: Record<string, string> = {}
+      next.forEach((v, k) => { obj[k] = v })
+      window.api.setAppState('convPermissions', JSON.stringify(obj))
       return next
     })
   }, [activeConversationId])
@@ -262,6 +277,22 @@ function App(): JSX.Element {
       if (state.contentFontSize) {
         const size = parseInt(state.contentFontSize, 10)
         if (size >= 10 && size <= 24) setContentFontSize(size)
+      }
+      if (state.convPermissions) {
+        try {
+          const obj = JSON.parse(state.convPermissions) as Record<string, string>
+          const validModes = ['full', 'default', 'plan', 'approve']
+          const restored = new Map<string, PermissionMode>()
+          for (const [k, v] of Object.entries(obj)) {
+            if (validModes.includes(v)) restored.set(k, v as PermissionMode)
+          }
+          if (restored.size > 0) setPerConvPermission(restored)
+        } catch { /* ignore corrupt data */ }
+      }
+      if (state.keyboardShortcuts) {
+        try {
+          setCustomShortcuts(JSON.parse(state.keyboardShortcuts) as ShortcutBinding[])
+        } catch { /* ignore corrupt data */ }
       }
 
       // Detect interrupted sessions from previous run
@@ -777,6 +808,7 @@ function App(): JSX.Element {
         // New tool call
         const toolCallId = update.toolCallId as string || `tool-${Date.now()}`
         const title = update.title as string || 'Tool'
+        if (title === EXIT_PLAN_MODE_TITLE) return // Handled by Plan Sidebar
         const rawInput = update.rawInput as Record<string, unknown> || {}
         const kind = update.kind as string || 'other'
         const seenToolIds = new Set(buf.tools.map((t) => t.id))
@@ -1027,40 +1059,56 @@ function App(): JSX.Element {
     }
   }, [activeConversationId, updateLastAssistantMessage])
 
+  const navigateToConversation = useCallback((conversationId: string) => {
+    setActiveConversationId(conversationId)
+    const ownerProject = projectsRef.current.find((p) =>
+      p.conversations.some((c) => c.id === conversationId)
+    )
+    if (ownerProject) setActiveProjectId(ownerProject.id)
+  }, [])
+
   // --- ACP Permission handling ---
-  // Listen for permission requests from the ACP agent
   useEffect(() => {
-    const unsub = window.api.onPermissionRequest((data) => {
+    const unsub = window.api.onPermissionRequest(async (data) => {
+      const toolTitle = (data.toolCall as Record<string, unknown>)?.title as string || ''
+
+      if (toolTitle === EXIT_PLAN_MODE_TITLE) {
+        if (data.conversationId) navigateToConversation(data.conversationId)
+
+        // Load plan file content into sidebar
+        let content = ''
+        const planFilePath = await window.api.findLatestPlanFile()
+        if (planFilePath) {
+          const result = await window.api.readFileContent(planFilePath)
+          if (result.exists) content = result.content
+        }
+
+        setPlanContent(content)
+        setPlanEntries([])
+        setPlanConvId(data.conversationId)
+        setPlanSidebarOpen(true)
+        setPendingPlanApproval({ requestId: data.requestId, conversationId: data.conversationId })
+        return
+      }
+
       const newDenial: DeniedTool = {
-        tool_name: (data.toolCall as Record<string, unknown>)?.title as string || 'Tool',
+        tool_name: toolTitle || 'Tool',
         tool_use_id: data.requestId,
         tool_input: (data.toolCall as Record<string, unknown>)?.rawInput as Record<string, unknown> || {}
       }
       setPendingApprovals((prev) => [...prev, newDenial])
       setApprovalConvId(data.conversationId)
-      // Auto-navigate to the conversation requesting permission
-      if (data.conversationId) {
-        setActiveConversationId(data.conversationId)
-        const ownerProject = projectsRef.current.find((p) =>
-          p.conversations.some((c) => c.id === data.conversationId)
-        )
-        if (ownerProject) setActiveProjectId(ownerProject.id)
-      }
+      if (data.conversationId) navigateToConversation(data.conversationId)
     })
     return unsub
-  }, [])
+  }, [navigateToConversation])
 
-  // Navigate to conversation when notification is clicked
   useEffect(() => {
     const unsub = window.api.onNotificationNavigate(({ conversationId }) => {
-      setActiveConversationId(conversationId)
-      const ownerProject = projectsRef.current.find((p) =>
-        p.conversations.some((c) => c.id === conversationId)
-      )
-      if (ownerProject) setActiveProjectId(ownerProject.id)
+      navigateToConversation(conversationId)
     })
     return unsub
-  }, [])
+  }, [navigateToConversation])
 
   const handleApproveChanges = useCallback(async (approved: DeniedTool[]) => {
     // With ACP, approving sends the permission response back to the agent
@@ -1090,6 +1138,20 @@ function App(): JSX.Element {
     setPendingApprovals([])
     setApprovalConvId(null)
   }, [pendingApprovals])
+
+  const handleApprovePlan = useCallback(() => {
+    if (!pendingPlanApproval) return
+    window.api.respondToPermission(pendingPlanApproval.requestId, 'allow')
+    setPendingPlanApproval(null)
+    setPlanSidebarOpen(false)
+    setPermissionMode('full')
+  }, [pendingPlanApproval, setPlanSidebarOpen, setPermissionMode])
+
+  const handleRejectPlan = useCallback(() => {
+    if (!pendingPlanApproval) return
+    window.api.respondToPermission(pendingPlanApproval.requestId, 'reject')
+    setPendingPlanApproval(null)
+  }, [pendingPlanApproval])
 
   const handleNewChat = useCallback(() => {
     setActiveConversationId(null)
@@ -1243,20 +1305,57 @@ function App(): JSX.Element {
     handleSend(text)
   }, [activeProject, handleSend])
 
-  // Keyboard shortcut: Ctrl+` or Cmd+` to toggle terminal
-  useEffect(() => {
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === '`' && (e.ctrlKey || e.metaKey) && activeProject) {
-        e.preventDefault()
-        setTerminalOpen((prev) => !prev)
+  // --- Keyboard shortcuts ---
+  const sidebarToggleRef = useRef<(() => void) | null>(null)
+
+  const mergedShortcuts = useMemo(
+    () => mergeShortcuts(DEFAULT_SHORTCUTS, customShortcuts),
+    [customShortcuts]
+  )
+
+  const activeConvsRef = useRef(activeConversations)
+  activeConvsRef.current = activeConversations
+
+  const shortcutActions = useMemo(() => {
+    const actions: Record<string, () => void> = {
+      newChat: handleNewChat,
+      toggleSidebar: () => sidebarToggleRef.current?.(),
+      toggleTerminal: () => setTerminalOpen((prev) => !prev),
+      openSettings: () => setSettingsOpen('global'),
+      openProjectSettings: () => setSettingsOpen('project'),
+    }
+    for (let i = 1; i <= 9; i++) {
+      actions[`switchTab${i}`] = () => {
+        const conv = activeConvsRef.current[i - 1]
+        if (conv) setActiveConversationId(conv.id)
+      }
+      actions[`switchProject${i}`] = () => {
+        const proj = projectsRef.current[i - 1]
+        if (proj) setActiveProjectId(proj.id)
       }
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [activeProject])
+    return actions
+  }, [handleNewChat])
+
+  useKeyboardShortcuts(shortcutActions, customShortcuts)
+
+  const handleUpdateShortcut = useCallback((id: string, key: string, modifiers: ShortcutModifiers) => {
+    setCustomShortcuts((prev) => {
+      const base = prev ?? DEFAULT_SHORTCUTS.map((s) => ({ ...s }))
+      const next = base.map((s) => s.id === id ? { ...s, key, modifiers } : s)
+      window.api.setAppState('keyboardShortcuts', JSON.stringify(next))
+      return next
+    })
+  }, [])
+
+  const handleResetShortcuts = useCallback(() => {
+    setCustomShortcuts(null)
+    window.api.setAppState('keyboardShortcuts', '')
+  }, [])
 
   return (
     <SidebarProvider className="bg-td-bg text-td-text">
+      <SidebarToggleBridge toggleRef={sidebarToggleRef} />
       <AppSidebar
         projects={projects}
         activeProjectId={activeProjectId}
@@ -1283,9 +1382,11 @@ function App(): JSX.Element {
         recentlyRetitled={recentlyRetitled}
       />
       {settingsOpen ? (
-        <SettingsPage key={`${settingsOpen}-${settingsOpen === 'project' ? settingsProject?.id : 'global'}`} project={settingsOpen === 'project' ? settingsProject || activeProject : activeProject} homedir={homedir} scope={settingsOpen} onClose={() => setSettingsOpen(false)} contentFontSize={contentFontSize} onContentFontSizeChange={setContentFontSize} onTestPlanSidebar={() => {
-          const testPlan = '## Test Plan\n\n1. **Step 1:** Read the codebase structure\n2. **Step 2:** Identify the relevant files\n3. **Step 3:** Implement the changes\n4. **Step 4:** Run tests and verify\n\n> This is a simulated plan to test the sidebar rendering.'
+        <SettingsPage key={`${settingsOpen}-${settingsOpen === 'project' ? settingsProject?.id : 'global'}`} project={settingsOpen === 'project' ? settingsProject || activeProject : activeProject} homedir={homedir} scope={settingsOpen} onClose={() => setSettingsOpen(false)} contentFontSize={contentFontSize} onContentFontSizeChange={setContentFontSize} shortcuts={mergedShortcuts} onUpdateShortcut={handleUpdateShortcut} onResetShortcuts={handleResetShortcuts} onTestPlanSidebar={() => {
+          const testPlan = '# Test Plan\n\n## Context\nSimulated plan to test the sidebar with approve/reject buttons.\n\n## Changes\n\n### 1. Update `package.json`\n**File:** `package.json` (line 4)\n- **From:** `"A desktop GUI for Claude Code"`\n- **To:** `"TD IDE — A desktop GUI for Claude Code"`\n\n## Verification\n- Build still passes'
           setPlanContent(testPlan)
+          setPlanEntries([])
+          setPendingPlanApproval({ requestId: 'test-plan-approval', conversationId: activeConversationId || 'test' })
           setPlanSidebarOpen(true)
           setSettingsOpen(false)
         }} />
@@ -1345,8 +1446,11 @@ function App(): JSX.Element {
                     if (activeConversationId) planDrafts.current.set(activeConversationId, content)
                   }}
                   onExecutePlan={handleExecutePlan}
-                  onClose={() => setPlanSidebarOpen(false)}
+                  onClose={() => { setPlanSidebarOpen(false); setPendingPlanApproval(null) }}
                   isStreaming={isLoading}
+                  pendingApproval={pendingPlanApproval}
+                  onApprovePlan={handleApprovePlan}
+                  onRejectPlan={handleRejectPlan}
                 />
               )}
               {diffViewData && (

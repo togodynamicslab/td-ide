@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Plus, FolderOpen, GitBranch, ChevronDown, Terminal, FilePlus, Loader2, Check, AlertCircle, PanelLeftOpen } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Button } from './ui/button'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuItem
@@ -40,7 +41,7 @@ function TopBar({
   }
 
   return (
-    <div className="flex items-center justify-between px-4 py-2 border-b border-td-border bg-td-bg titlebar-drag">
+    <div className="flex items-center justify-between px-4 py-1.5 border-b border-td-border/60 bg-td-bg titlebar-drag">
       <div className="flex items-center gap-2 min-w-0 titlebar-no-drag">
         {sidebarState === 'collapsed' && (
           <Tooltip>
@@ -52,8 +53,8 @@ function TopBar({
             <TooltipContent side="bottom">Expand sidebar (Cmd+B)</TooltipContent>
           </Tooltip>
         )}
-        <span className="text-sm text-td-text-secondary truncate">
-          {conversation?.title || 'New Chat'}
+        <span className={cn('text-sm truncate', conversation ? 'text-td-text-secondary' : 'text-td-muted')}>
+          {conversation?.title || 'No active thread'}
         </span>
         {project && (
           <span className="text-[11px] h-5 px-2 rounded bg-td-surface text-td-text-tertiary shrink-0 inline-flex items-center">

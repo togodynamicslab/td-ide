@@ -122,7 +122,7 @@ function AppSidebar({
   const prevLoadingRef = useRef<Set<string>>(new Set())
   const editInputRef = useRef<HTMLInputElement>(null)
   const { theme, toggleTheme } = useTheme()
-  const { toggleSidebar } = useSidebar()
+  const { state: sidebarState, toggleSidebar } = useSidebar()
 
   // Track conversations that just finished loading → show checkmark until clicked
   useEffect(() => {
@@ -152,6 +152,12 @@ function AppSidebar({
   }, [editingId])
 
   const toggleProject = (id: string) => {
+    // In collapsed mode, just switch to the project
+    if (sidebarState === 'collapsed') {
+      onSelectProject(id)
+      setExpandedProjects((prev) => new Set(prev).add(id))
+      return
+    }
     setExpandedProjects((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -217,11 +223,11 @@ function AppSidebar({
     <>
       <Sidebar collapsible="icon">
         {/* Header */}
-        <SidebarHeader className="flex-row items-center justify-between px-3 py-2.5 titlebar-drag gap-2">
+        <SidebarHeader className="flex-row items-center justify-between px-3 py-2 titlebar-drag gap-2">
           <WindowControls />
-          <div className="flex items-center gap-2 flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-semibold text-td-text">td-ide</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-td-surface text-td-muted uppercase tracking-wider font-medium">
+          <div className="flex items-center gap-1.5 flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
+            <span className="text-sm font-bold text-td-text tracking-tight">td-ide</span>
+            <span className="text-[9px] px-1 py-px rounded bg-td-muted/10 text-td-muted uppercase tracking-widest font-medium">
               Alpha
             </span>
           </div>
@@ -247,8 +253,28 @@ function AppSidebar({
 
         <SidebarSeparator />
 
+        {/* Collapsed: quick actions */}
+        <div className="hidden group-data-[collapsible=icon]:flex flex-col items-center gap-0.5 py-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" onClick={onNewChat} className="h-8 w-8">
+                <MessageSquarePlus className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">New chat</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" onClick={onAddProject} className="h-8 w-8">
+                <FolderOpen className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Add project</TooltipContent>
+          </Tooltip>
+        </div>
+
         {/* Projects */}
-        <SidebarContent>
+        <SidebarContent className="group-data-[collapsible=icon]:hidden">
           <SidebarGroup>
             <SidebarGroupLabel>Projects</SidebarGroupLabel>
             <SidebarGroupAction onClick={onAddProject} title="Add project">
@@ -275,6 +301,7 @@ function AppSidebar({
                           <SidebarMenuButton
                             isActive={project.id === activeProjectId}
                             onClick={() => toggleProject(project.id)}
+                            tooltip={project.name}
                             className="text-td-text-tertiary data-[active=true]:text-td-text"
                           >
                             {expandedProjects.has(project.id) ? (

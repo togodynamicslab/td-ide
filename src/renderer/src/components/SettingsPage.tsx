@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { ArrowLeft, Puzzle, FileText, Terminal, Shield, Type, Bug, Globe, FolderOpen } from 'lucide-react'
+import { ArrowLeft, Puzzle, FileText, Terminal, Shield, Type, Bug, Globe, FolderOpen, Keyboard } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import McpSettings from './McpSettings'
 import AppearanceSettings from './settings/AppearanceSettings'
@@ -7,7 +7,9 @@ import DeveloperSettings from './settings/DeveloperSettings'
 import ClaudeMdSettings from './settings/ClaudeMdSettings'
 import CommandsSettings from './settings/CommandsSettings'
 import PermissionsSettings from './settings/PermissionsSettings'
+import KeyboardSettings from './settings/KeyboardSettings'
 import type { Project } from '../App'
+import type { ShortcutBinding, ShortcutModifiers } from '../hooks/useKeyboardShortcuts'
 
 interface SettingsPageProps {
   project: Project | undefined
@@ -17,6 +19,9 @@ interface SettingsPageProps {
   contentFontSize: number
   onContentFontSizeChange: (size: number) => void
   onTestPlanSidebar?: () => void
+  shortcuts?: ShortcutBinding[]
+  onUpdateShortcut?: (id: string, key: string, modifiers: ShortcutModifiers) => void
+  onResetShortcuts?: () => void
 }
 
 interface NavItem {
@@ -32,10 +37,11 @@ const allNavItems: NavItem[] = [
   { id: 'permissions', label: 'Permissions', icon: Shield, scopes: ['global', 'project'] },
   { id: 'mcp', label: 'MCP Servers', icon: Puzzle, scopes: ['project'] },
   { id: 'appearance', label: 'Appearance', icon: Type, scopes: ['global'] },
+  { id: 'keyboard', label: 'Keyboard', icon: Keyboard, scopes: ['global'] },
   { id: 'developer', label: 'Developer', icon: Bug, scopes: ['global'] },
 ]
 
-function SettingsPage({ project, homedir, scope, onClose, contentFontSize, onContentFontSizeChange, onTestPlanSidebar }: SettingsPageProps): JSX.Element {
+function SettingsPage({ project, homedir, scope, onClose, contentFontSize, onContentFontSizeChange, onTestPlanSidebar, shortcuts, onUpdateShortcut, onResetShortcuts }: SettingsPageProps): JSX.Element {
   const navItems = useMemo(() => allNavItems.filter((item) => item.scopes.includes(scope)), [scope])
   const [activeSection, setActiveSection] = useState(() => navItems[0]?.id || 'claude-md')
 
@@ -123,6 +129,18 @@ function SettingsPage({ project, homedir, scope, onClose, contentFontSize, onCon
 
             {activeSection === 'appearance' && (
               <AppearanceSettings contentFontSize={contentFontSize} onContentFontSizeChange={onContentFontSizeChange} />
+            )}
+
+            {activeSection === 'keyboard' && shortcuts && onUpdateShortcut && onResetShortcuts && (
+              <>
+                <div className="mb-8">
+                  <h2 className="text-lg font-semibold text-td-text tracking-tight">Keyboard Shortcuts</h2>
+                  <p className="text-[13px] text-td-muted mt-1.5">
+                    Customize keyboard shortcuts. Click a binding to record a new key combination.
+                  </p>
+                </div>
+                <KeyboardSettings shortcuts={shortcuts} onUpdateShortcut={onUpdateShortcut} onResetAll={onResetShortcuts} />
+              </>
             )}
 
             {activeSection === 'developer' && (

@@ -98,6 +98,64 @@ body {
 
 /* Animated border for prompt input */
 
+/* Thinking orb — gentle pulsing dot */
+@keyframes orb-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+
+.thinking-orb {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.thinking-orb::before {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #D97757;
+  filter: blur(2px);
+  animation: orb-pulse 2.5s ease-in-out infinite;
+}
+
+.thinking-orb::after {
+  content: '';
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #D97757;
+}
+
+/* Blurred text transition for status changes */
+@keyframes text-blur-in {
+  0% {
+    filter: blur(4px);
+    opacity: 0.3;
+  }
+  100% {
+    filter: blur(0);
+    opacity: 1;
+  }
+}
+
+.blur-transition {
+  animation: text-blur-in 0.4s ease-out;
+}
+
 /* Shimmer effects */
 @keyframes shimmer {
   0% { background-position: -200% 0; }
