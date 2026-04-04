@@ -17,6 +17,7 @@ export interface ShortcutBinding {
 
 const META_ONLY: ShortcutModifiers = { meta: true, shift: false, ctrl: false, alt: false }
 const META_SHIFT: ShortcutModifiers = { meta: true, shift: true, ctrl: false, alt: false }
+const CTRL_ONLY: ShortcutModifiers = { meta: false, shift: false, ctrl: true, alt: false }
 
 export const DEFAULT_SHORTCUTS: ShortcutBinding[] = [
   ...Array.from({ length: 9 }, (_, i): ShortcutBinding => ({
@@ -25,11 +26,11 @@ export const DEFAULT_SHORTCUTS: ShortcutBinding[] = [
   })),
   ...Array.from({ length: 9 }, (_, i): ShortcutBinding => ({
     id: `switchProject${i + 1}`, label: `Switch to project ${i + 1}`, category: 'navigation',
-    key: `${i + 1}`, modifiers: META_SHIFT,
+    key: `${i + 1}`, modifiers: CTRL_ONLY,
   })),
   { id: 'newChat', label: 'New chat', category: 'general', key: 'n', modifiers: META_ONLY },
   { id: 'toggleSidebar', label: 'Toggle sidebar', category: 'general', key: 'b', modifiers: META_ONLY },
-  { id: 'toggleTerminal', label: 'Toggle terminal', category: 'general', key: '`', modifiers: { meta: false, shift: false, ctrl: true, alt: false } },
+  { id: 'toggleTerminal', label: 'Toggle terminal', category: 'general', key: '`', modifiers: CTRL_ONLY },
   { id: 'openSettings', label: 'Settings', category: 'general', key: ',', modifiers: META_ONLY },
   { id: 'openProjectSettings', label: 'Project settings', category: 'general', key: ',', modifiers: META_SHIFT },
 ]
@@ -41,13 +42,15 @@ function matchesShortcut(e: KeyboardEvent, binding: ShortcutBinding): boolean {
   if (binding.modifiers.shift !== e.shiftKey) return false
   if (binding.modifiers.alt !== e.altKey) return false
 
-  if (binding.modifiers.meta) {
-    return e.metaKey || e.ctrlKey
-  }
-  if (binding.modifiers.ctrl) {
-    return e.ctrlKey || e.metaKey
-  }
-  return !e.metaKey && !e.ctrlKey
+  const wantsMeta = binding.modifiers.meta
+  const wantsCtrl = binding.modifiers.ctrl
+  const hasMeta = e.metaKey
+  const hasCtrl = e.ctrlKey
+
+  if (wantsMeta && wantsCtrl) return hasMeta && hasCtrl
+  if (wantsMeta) return hasMeta && !hasCtrl
+  if (wantsCtrl) return hasCtrl && !hasMeta
+  return !hasMeta && !hasCtrl
 }
 
 export function mergeShortcuts(defaults: ShortcutBinding[], overrides: ShortcutBinding[] | null): ShortcutBinding[] {

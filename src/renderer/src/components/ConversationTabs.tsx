@@ -74,6 +74,9 @@ function ConversationTabs({
 
   useEffect(() => {
     activeTabRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    if (activeConversationId && recentlyFinished.has(activeConversationId)) {
+      setRecentlyFinished((s) => { const n = new Set(s); n.delete(activeConversationId); return n })
+    }
   }, [activeConversationId])
 
   const dismissNewChat = useCallback(() => {
