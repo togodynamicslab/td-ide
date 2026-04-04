@@ -4,7 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 
 interface MemoryInfo {
   main: { rss: number; heapUsed: number; heapTotal: number }
-  claude: { conversationId: string; rss: number }[]
+  agent: { pid: number | null; rss: number; sessions: number }
 }
 
 function formatMB(bytes: number): string {
@@ -26,9 +26,7 @@ function MemoryIndicator(): JSX.Element | null {
 
   if (!memory) return null
 
-  const claudeTotal = memory.claude.reduce((sum, c) => sum + c.rss, 0)
-  const total = memory.main.rss + claudeTotal
-  const agents = memory.claude.length
+  const total = memory.main.rss + memory.agent.rss
 
   return (
     <Tooltip>
@@ -36,7 +34,7 @@ function MemoryIndicator(): JSX.Element | null {
         <div className="flex items-center gap-2 px-2 py-1 text-[11px] text-td-muted cursor-default group-data-[collapsible=icon]:justify-center">
           <Cpu className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate group-data-[collapsible=icon]:hidden">
-            {formatMB(total)}{agents > 0 && ` (${agents} agent${agents > 1 ? 's' : ''})`}
+            {formatMB(total)}
           </span>
         </div>
       </TooltipTrigger>
@@ -44,14 +42,17 @@ function MemoryIndicator(): JSX.Element | null {
         <div className="text-xs space-y-1">
           <div>App: {formatMB(memory.main.rss)}</div>
           <div className="text-td-muted">Heap: {formatMB(memory.main.heapUsed)} / {formatMB(memory.main.heapTotal)}</div>
-          {agents > 0 && (
+          {memory.agent.pid && (
             <>
-              <div className="border-t border-td-border pt-1 mt-1">Claude processes:</div>
-              {memory.claude.map((c) => (
-                <div key={c.conversationId} className="text-td-muted">
-                  {c.conversationId.slice(0, 8)}… — {formatMB(c.rss)}
-                </div>
-              ))}
+              <div className="border-t border-td-border pt-1 mt-1">
+                Agent process (PID {memory.agent.pid})
+              </div>
+              <div className="text-td-muted">
+                Memory: {formatMB(memory.agent.rss)}
+              </div>
+              <div className="text-td-muted">
+                Active sessions: {memory.agent.sessions}
+              </div>
             </>
           )}
         </div>

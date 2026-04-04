@@ -139,20 +139,20 @@ function Sidebar({
       data-side={side}
       data-slot="sidebar"
     >
-      {/* Spacer that shrinks when collapsed */}
       <div
         data-slot="sidebar-gap"
         className={cn(
-          'relative w-[var(--sidebar-width)] bg-transparent transition-[width] duration-200 ease-linear shrink-0',
+          'relative w-[var(--sidebar-width)] bg-transparent shrink-0',
+          'transition-[width] duration-200 ease-linear group-data-[resizing]:!transition-none',
           'group-data-[collapsible=offcanvas]:w-0',
           'group-data-[collapsible=icon]:w-[var(--sidebar-width-icon)]'
         )}
       />
-      {/* Fixed sidebar container */}
       <div
         data-slot="sidebar-container"
         className={cn(
-          'fixed inset-y-0 z-10 h-screen w-[var(--sidebar-width)] transition-[left,right,width] duration-200 ease-linear flex',
+          'fixed inset-y-0 z-10 h-screen w-[var(--sidebar-width)] flex',
+          'transition-[left,right,width] duration-200 ease-linear group-data-[resizing]:!transition-none',
           side === 'left'
             ? 'left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]'
             : 'right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]',
@@ -169,7 +169,6 @@ function Sidebar({
         >
           {children}
         </div>
-        {/* Resize handle */}
         {state === 'expanded' && (
           <SidebarResizeHandle side={side} />
         )}
@@ -179,27 +178,30 @@ function Sidebar({
 }
 
 function SidebarResizeHandle({ side }: { side: 'left' | 'right' }) {
-  const { sidebarWidth, setSidebarWidth } = useSidebar()
-  const dragging = React.useRef(false)
+  const { setSidebarWidth } = useSidebar()
   const startX = React.useRef(0)
   const startWidth = React.useRef(0)
+  const parentRef = React.useRef<HTMLElement | null>(null)
 
   const handlePointerDown = React.useCallback(
     (e: React.PointerEvent) => {
       e.preventDefault()
-      dragging.current = true
+      const sidebarEl = (e.currentTarget as HTMLElement).closest('[data-slot="sidebar"]')
+      parentRef.current = sidebarEl as HTMLElement
       startX.current = e.clientX
-      startWidth.current = sidebarWidth
+      const gap = sidebarEl?.querySelector('[data-slot="sidebar-gap"]')
+      startWidth.current = gap ? gap.getBoundingClientRect().width : 240
+
+      sidebarEl?.setAttribute('data-resizing', '')
 
       const handlePointerMove = (ev: PointerEvent): void => {
-        if (!dragging.current) return
         const delta = side === 'left' ? ev.clientX - startX.current : startX.current - ev.clientX
         const newWidth = Math.min(Math.max(startWidth.current + delta, SIDEBAR_WIDTH_MIN), SIDEBAR_WIDTH_MAX)
         setSidebarWidth(newWidth)
       }
 
       const handlePointerUp = (): void => {
-        dragging.current = false
+        parentRef.current?.removeAttribute('data-resizing')
         document.removeEventListener('pointermove', handlePointerMove)
         document.removeEventListener('pointerup', handlePointerUp)
         document.body.style.cursor = ''
@@ -211,7 +213,7 @@ function SidebarResizeHandle({ side }: { side: 'left' | 'right' }) {
       document.addEventListener('pointermove', handlePointerMove)
       document.addEventListener('pointerup', handlePointerUp)
     },
-    [sidebarWidth, setSidebarWidth, side]
+    [setSidebarWidth, side]
   )
 
   return (

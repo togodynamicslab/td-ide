@@ -145,6 +145,20 @@ ipcMain.handle('fs:find-files', async (_event, { rootDir, filename, maxDepth = 1
   return { files: results }
 })
 
+ipcMain.handle('fs:find-latest-plan-file', async () => {
+  const plansDir = join(homedir(), '.claude', 'plans')
+  if (!existsSync(plansDir)) return null
+  try {
+    const files = readdirSync(plansDir)
+      .filter(f => f.endsWith('.md'))
+      .map(f => ({ path: join(plansDir, f), mtime: statSync(join(plansDir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)
+    return files.length > 0 ? files[0].path : null
+  } catch {
+    return null
+  }
+})
+
 ipcMain.handle('fs:list-directory', async (_event, { dirPath }: { dirPath: string }) => {
   try {
     if (!existsSync(dirPath)) return { files: [] }
@@ -452,6 +466,23 @@ ipcMain.handle('git:init', async (_event, { cwd }: { cwd: string }) => {
   return { success: true, branch }
 })
 
+ipcMain.handle('git:diff-stats', (_event, { cwd }: { cwd: string }) => {
+  try {
+    const raw = execSync('git diff --stat HEAD 2>/dev/null || git diff --stat', { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 })
+    let additions = 0
+    let deletions = 0
+    for (const line of raw.split('\n')) {
+      const match = line.match(/(\d+) insertions?\(\+\)/)
+      if (match) additions += Number(match[1])
+      const delMatch = line.match(/(\d+) deletions?\(-\)/)
+      if (delMatch) deletions += Number(delMatch[1])
+    }
+    return { additions, deletions }
+  } catch {
+    return { additions: 0, deletions: 0 }
+  }
+})
+
 ipcMain.handle('git:branches', (_event, { cwd }: { cwd: string }) => {
   try {
     const raw = execSync('git --no-pager branch --no-color', { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 })
@@ -649,9 +680,18 @@ ipcMain.handle('process:kill-orphan', (_event, { pid }: { pid: number }) => {
 
 ipcMain.handle('process:get-memory-usage', () => {
   const mainMemory = process.memoryUsage()
+  const agentInfo = acpManager?.getProcessInfo() || { pid: null, sessions: 0 }
+  let agentRss = 0
+  if (agentInfo.pid) {
+    try {
+      // macOS: use ps to get RSS in KB
+      const raw = execSync(`ps -o rss= -p ${agentInfo.pid}`, { encoding: 'utf-8', timeout: 2000 }).trim()
+      agentRss = parseInt(raw, 10) * 1024 // KB to bytes
+    } catch { /* process may have exited */ }
+  }
   return {
     main: { rss: mainMemory.rss, heapUsed: mainMemory.heapUsed, heapTotal: mainMemory.heapTotal },
-    claude: [] as { conversationId: string; rss: number }[]
+    agent: { pid: agentInfo.pid, rss: agentRss, sessions: agentInfo.sessions }
   }
 })
 

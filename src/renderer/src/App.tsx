@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import AppSidebar from './components/Sidebar'
 import { SidebarProvider } from './components/ui/sidebar'
 import TopBar from './components/TopBar'
@@ -13,6 +13,8 @@ import UsageDialog from './components/UsageDialog'
 import ApprovalWidget from './components/ApprovalWidget'
 import type { DiffViewData } from './components/ApprovalWidget'
 import DiffSidebar from './components/DiffSidebar'
+import ToolDetailSidebar from './components/ToolDetailSidebar'
+import ConversationTabs from './components/ConversationTabs'
 
 export interface ToolBlock {
   id: string
@@ -67,6 +69,15 @@ export type PermissionMode = 'full' | 'default' | 'plan' | 'approve'
 export type ApiProvider = 'anthropic' | 'openrouter'
 export type ApiMode = 'subscription' | 'apikey'
 
+export type PlanEntryStatus = 'pending' | 'in_progress' | 'completed'
+export type PlanEntryPriority = 'high' | 'medium' | 'low'
+
+export interface PlanEntry {
+  content: string
+  status: PlanEntryStatus
+  priority: PlanEntryPriority
+}
+
 export interface ModelUsageEntry {
   model: string
   inputTokens: number
@@ -109,7 +120,10 @@ function App(): JSX.Element {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const activeConversationIdRef = useRef<string | null>(null)
-  useEffect(() => { activeConversationIdRef.current = activeConversationId }, [activeConversationId])
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId
+    setToolDetailTool(null)
+  }, [activeConversationId])
   const [loadingConvs, setLoadingConvs] = useState<Set<string>>(new Set())
   const [recentlyRetitled, setRecentlyRetitled] = useState<Set<string>>(new Set())
   const [selectedModel, setSelectedModel] = useState<ModelId>('opus')
@@ -127,6 +141,7 @@ function App(): JSX.Element {
   const [pendingApprovals, setPendingApprovals] = useState<DeniedTool[]>([])
   const [approvalConvId, setApprovalConvId] = useState<string | null>(null)
   const [gitBranch, setGitBranch] = useState<string | null>(null)
+  const [gitDiffStats, setGitDiffStats] = useState<{ additions: number; deletions: number }>({ additions: 0, deletions: 0 })
   const [settingsOpen, setSettingsOpen] = useState<false | 'global' | 'project'>(false)
   const [settingsProject, setSettingsProject] = useState<Project | null>(null)
   const [homedir, setHomedir] = useState('')
@@ -137,8 +152,11 @@ function App(): JSX.Element {
     _setPlanSidebarOpen(open)
   }, [])
   const [planContent, setPlanContent] = useState('')
+  const [planEntries, setPlanEntries] = useState<PlanEntry[]>([])
   const [planConvId, setPlanConvId] = useState<string | null>(null)
+  const [pendingPlanApproval, setPendingPlanApproval] = useState<{ requestId: string; conversationId: string } | null>(null)
   const [diffViewData, setDiffViewData] = useState<DiffViewData | null>(null)
+  const [toolDetailTool, setToolDetailTool] = useState<ToolBlock | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(300)
   const [useWorktree, setUseWorktree] = useState(false)
@@ -151,8 +169,9 @@ function App(): JSX.Element {
 
   // Per-conversation usage tracking
   const usageMap = useRef(new Map<string, ConversationUsage>())
-  // Per-conversation plan content
+  // Per-conversation plan entries (structured) and text fallback
   const planDrafts = useRef(new Map<string, string>())
+  const planEntryDrafts = useRef(new Map<string, PlanEntry[]>())
   // Per-conversation stream buffers for parallel support
   const buffers = useRef(new Map<string, StreamBuffer>())
   const projectsRef = useRef(projects)
@@ -177,6 +196,10 @@ function App(): JSX.Element {
   const activeProject = projects.find((p) => p.id === activeProjectId)
   const activeConversation = activeProject?.conversations.find(
     (c) => c.id === activeConversationId
+  )
+  const activeConversations = useMemo(
+    () => activeProject?.conversations.filter((c) => !c.archived) ?? [],
+    [activeProject?.conversations]
   )
   const isLoading = activeConversationId ? loadingConvs.has(activeConversationId) : false
 
@@ -345,15 +368,19 @@ function App(): JSX.Element {
   }, [activeProjectId])
 
   // --- Check git status when project changes ---
-  useEffect(() => {
+  const refreshGitInfo = useCallback(() => {
     if (!activeProject) {
       setGitBranch(null)
+      setGitDiffStats({ additions: 0, deletions: 0 })
       return
     }
     window.api.gitStatus(activeProject.path).then((result) => {
       setGitBranch(result.isRepo ? result.branch : null)
     })
-  }, [activeProject?.path])
+    window.api.gitDiffStats(activeProject.path).then(setGitDiffStats)
+  }, [activeProject])
+
+  useEffect(() => { refreshGitInfo() }, [refreshGitInfo])
 
   // --- Load messages when conversation changes ---
   useEffect(() => {
@@ -646,7 +673,23 @@ function App(): JSX.Element {
       // Use worktree path if the conversation has one, otherwise project path
       const conv = activeProject.conversations.find((c) => c.id === convId)
       const cwd = conv?.worktreePath || activeProject.path
-      window.api.sendMessage(messageText, convId, cwd, permissionMode)
+
+      // Expand !`cmd` patterns (inline shell commands like Claude Code)
+      let finalMessage = messageText
+      const bangPattern = /!\`([^`]+)\`/g
+      const bangMatches = [...messageText.matchAll(bangPattern)]
+      if (bangMatches.length > 0) {
+        for (const m of bangMatches) {
+          try {
+            const result = await window.api.executeCommand(m[1], cwd)
+            finalMessage = finalMessage.replace(m[0], result.stdout.trim() || result.stderr.trim() || '')
+          } catch {
+            finalMessage = finalMessage.replace(m[0], `[error running: ${m[1]}]`)
+          }
+        }
+      }
+
+      window.api.sendMessage(finalMessage, convId, cwd, permissionMode)
     },
     [activeConversationId, activeProject, activeProjectId, createConversation, addMessage, permissionMode]
   )
@@ -680,10 +723,13 @@ function App(): JSX.Element {
     [activeProjectId, activeProject, activeConversationId, loadingConvs, processMessage, executeShellCommand]
   )
 
-  // Helper: open plan sidebar for a conversation
-  const openPlanSidebar = useCallback((convId: string, text: string) => {
-    planDrafts.current.set(convId, text)
+  // Helper: open plan sidebar for a conversation (using stored drafts)
+  const openPlanSidebar = useCallback((convId: string) => {
+    const entries = planEntryDrafts.current.get(convId)
+    const text = planDrafts.current.get(convId) || ''
+    if (!entries && !text) return
     setPlanContent(text)
+    setPlanEntries(entries || [])
     setPlanConvId(convId)
     setActiveConversationId(convId)
     setPlanSidebarOpen(true)
@@ -786,9 +832,9 @@ function App(): JSX.Element {
         const duration = Date.now() - buf.startedAt
         updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
 
-        // Auto-capture plan content when in plan mode
-        if (buf.permissionMode === 'plan' && buf.text.trim()) {
-          openPlanSidebar(conversationId, buf.text)
+        // Auto-open plan sidebar when in plan mode and we received plan entries
+        if (buf.permissionMode === 'plan' && planEntryDrafts.current.has(conversationId)) {
+          openPlanSidebar(conversationId)
         }
 
         // Usage from prompt response
@@ -814,13 +860,31 @@ function App(): JSX.Element {
         window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration, JSON.stringify(buf.contentBlocks))
         buffers.current.delete(conversationId)
       } else if (sessionUpdate === 'plan') {
-        // Plan entries from the agent
-        const entries = update.entries as Array<Record<string, unknown>> | undefined
-        if (entries) {
-          const planText = entries.map(e => `- [${e.status}] ${e.content}`).join('\n')
-          planDrafts.current.set(conversationId, planText)
-          setPlanContent(planText)
-          setPlanConvId(conversationId)
+        // ACP sends plan updates for internal agent todos — only show in plan sidebar
+        // when the conversation is actually in plan permission mode
+        const convMode = buf?.permissionMode || convPermissionModes.current.get(conversationId)
+        if (convMode !== 'plan') {
+          // Not in plan mode — ignore (these are internal agent task tracking)
+        } else {
+          const rawEntries = update.entries as Array<Record<string, unknown>> | undefined
+          if (rawEntries && rawEntries.length > 0) {
+            const entries: PlanEntry[] = rawEntries.map(e => ({
+              content: String(e.content || ''),
+              status: (e.status as PlanEntryStatus) || 'pending',
+              priority: (e.priority as PlanEntryPriority) || 'medium'
+            }))
+            const planText = entries.map(e => `- [${e.status}] ${e.content}`).join('\n')
+            planDrafts.current.set(conversationId, planText)
+            planEntryDrafts.current.set(conversationId, entries)
+            if (conversationId === activeConversationIdRef.current) {
+              setPlanEntries(entries)
+              setPlanContent(planText)
+              setPlanConvId(conversationId)
+              if (!planSidebarOpenRef.current) {
+                setPlanSidebarOpen(true)
+              }
+            }
+          }
         }
       } else if (sessionUpdate === 'current_mode_update') {
         // Mode changed by the agent
@@ -851,9 +915,9 @@ function App(): JSX.Element {
         updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks, duration)
         window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration, JSON.stringify(buf.contentBlocks))
 
-        // Fallback: open plan sidebar if result event didn't trigger it
-        if (buf.permissionMode === 'plan' && buf.text.trim()) {
-          openPlanSidebar(conversationId, buf.text)
+        // Fallback: open plan sidebar if prompt_complete didn't trigger it
+        if (buf.permissionMode === 'plan' && planEntryDrafts.current.has(conversationId)) {
+          openPlanSidebar(conversationId)
         }
 
         buffers.current.delete(conversationId)
@@ -861,10 +925,14 @@ function App(): JSX.Element {
 
       // Final fallback: check stored permission mode even if buffer was already deleted by result handler
       const convMode = convPermissionModes.current.get(conversationId)
-      if (convMode === 'plan' && assistantText.trim() && !planDrafts.current.has(conversationId)) {
-        openPlanSidebar(conversationId, assistantText)
+      if (convMode === 'plan' && planEntryDrafts.current.has(conversationId) && !planSidebarOpenRef.current) {
+        openPlanSidebar(conversationId)
       }
       convPermissionModes.current.delete(conversationId)
+      // Refresh git diff stats after agent may have modified files
+      if (activeProject) {
+        window.api.gitDiffStats(activeProject.path).then(setGitDiffStats)
+      }
       setLoadingConvs((prev) => {
         const next = new Set(prev)
         next.delete(conversationId)
@@ -1072,6 +1140,13 @@ function App(): JSX.Element {
   const handleDeleteConversation = useCallback(async (conversationId: string) => {
     await window.api.deleteConversation(conversationId)
     loadedConvs.current.delete(conversationId)
+    messagesCache.current.delete(conversationId)
+    planDrafts.current.delete(conversationId)
+    planEntryDrafts.current.delete(conversationId)
+    usageMap.current.delete(conversationId)
+    finalTexts.current.delete(conversationId)
+    convPermissionModes.current.delete(conversationId)
+    lastUserMessages.current.delete(conversationId)
     setProjects((prev) =>
       prev.map((p) => ({
         ...p,
@@ -1151,7 +1226,9 @@ function App(): JSX.Element {
   // Sync plan content when switching conversations
   useEffect(() => {
     const content = activeConversationId ? planDrafts.current.get(activeConversationId) || '' : ''
+    const entries = activeConversationId ? planEntryDrafts.current.get(activeConversationId) || [] : []
     setPlanContent(content)
+    setPlanEntries(entries)
   }, [activeConversationId])
 
   const handleAddFile = useCallback(async () => {
@@ -1217,9 +1294,7 @@ function App(): JSX.Element {
         <TopBar
           project={activeProject}
           conversation={activeConversation}
-          permissionMode={permissionMode}
           gitBranch={gitBranch}
-          onBranchChange={setGitBranch}
           onGitInit={handleGitInit}
           onOpenInExplorer={handleOpenInExplorer}
           onOpenInTerminal={handleOpenInTerminal}
@@ -1227,6 +1302,18 @@ function App(): JSX.Element {
         />
         {activeProject ? (
           <>
+            <ConversationTabs
+              conversations={activeConversations}
+              activeConversationId={activeConversationId}
+              loadingConversations={loadingConvs}
+              interruptedConversations={interruptedConvIds}
+              recentlyRetitled={recentlyRetitled}
+              queuedCounts={new Map(Array.from(messageQueue.current.entries()).map(([k, v]) => [k, v.length]))}
+              onSelectConversation={setActiveConversationId}
+              onArchiveConversation={(id) => handleArchiveConversation(id, true)}
+              onRenameConversation={handleRenameConversation}
+              onDeleteConversation={handleDeleteConversation}
+            />
             <div className="flex flex-1 min-h-0">
               <div className="flex flex-1 flex-col min-w-0">
                 <div className="flex-1 flex flex-col min-h-0">
@@ -1235,6 +1322,7 @@ function App(): JSX.Element {
                     isLoading={isLoading}
                     permissionMode={permissionMode}
                     contentFontSize={contentFontSize}
+                    onToolClick={setToolDetailTool}
                   />
                 </div>
                 {terminalOpen && (
@@ -1251,6 +1339,7 @@ function App(): JSX.Element {
               {planSidebarOpen && (
                 <PlanSidebar
                   planContent={planContent}
+                  planEntries={planEntries}
                   onPlanChange={(content) => {
                     setPlanContent(content)
                     if (activeConversationId) planDrafts.current.set(activeConversationId, content)
@@ -1269,6 +1358,12 @@ function App(): JSX.Element {
                   newContent={diffViewData.newContent}
                   command={diffViewData.command}
                   onClose={() => setDiffViewData(null)}
+                />
+              )}
+              {toolDetailTool && !diffViewData && !planSidebarOpen && (
+                <ToolDetailSidebar
+                  tool={toolDetailTool}
+                  onClose={() => setToolDetailTool(null)}
                 />
               )}
             </div>
@@ -1368,6 +1463,12 @@ function App(): JSX.Element {
               onApiKeyChange={setApiKey}
               customModel={customModel}
               onCustomModelChange={setCustomModel}
+              gitBranch={gitBranch}
+              gitDiffStats={gitDiffStats}
+              onCommitChanges={() => handleSend('Please commit the current changes. Review the diff, write a good commit message, and create the commit.')}
+              projectPath={activeProject?.path || null}
+              onBranchChange={(branch) => { setGitBranch(branch); refreshGitInfo() }}
+              worktreePath={activeConversation?.worktreePath || null}
             />
             <UsageDialog
               open={usageOpen}

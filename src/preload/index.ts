@@ -39,6 +39,9 @@ const api = {
   gitStatus: (cwd: string): Promise<{ isRepo: boolean; branch: string | null }> => {
     return ipcRenderer.invoke('git:status', { cwd })
   },
+  gitDiffStats: (cwd: string): Promise<{ additions: number; deletions: number }> => {
+    return ipcRenderer.invoke('git:diff-stats', { cwd })
+  },
   gitInit: (cwd: string): Promise<{ success: boolean; branch?: string; error?: string }> => {
     return ipcRenderer.invoke('git:init', { cwd })
   },
@@ -107,6 +110,9 @@ const api = {
   },
   getHomedir: (): Promise<string> => {
     return ipcRenderer.invoke('app:get-homedir')
+  },
+  findLatestPlanFile: (): Promise<string | null> => {
+    return ipcRenderer.invoke('fs:find-latest-plan-file')
   },
 
   // File picker

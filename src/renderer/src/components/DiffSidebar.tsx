@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useMemo } from 'react'
 import { X, FileEdit, FilePlus, Terminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useHorizontalResize } from '../hooks/useHorizontalResize'
 
 interface DiffSidebarProps {
   filePath: string
@@ -37,52 +38,7 @@ function CodeLine({ content, lineNum, type }: { content: string; lineNum?: numbe
 export default function DiffSidebar({ filePath, action, oldString, newString, newContent, command, onClose }: DiffSidebarProps) {
   const fileName = filePath.split('/').pop() || filePath
   const dirPath = filePath.split('/').slice(0, -1).join('/') || ''
-  const [width, setWidth] = useState(560)
-  const dragging = useRef(false)
-  const rafId = useRef(0)
-
-  useEffect(() => {
-    return () => {
-      if (dragging.current) {
-        dragging.current = false
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        cancelAnimationFrame(rafId.current)
-      }
-    }
-  }, [])
-
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    dragging.current = true
-    let pending = 0
-
-    const apply = (): void => {
-      if (dragging.current && pending > 0) setWidth(pending)
-    }
-
-    const onMove = (ev: MouseEvent): void => {
-      if (!dragging.current) return
-      const newWidth = window.innerWidth - ev.clientX
-      pending = Math.min(Math.max(newWidth, 320), window.innerWidth - 260)
-      cancelAnimationFrame(rafId.current)
-      rafId.current = requestAnimationFrame(apply)
-    }
-
-    const onUp = (): void => {
-      dragging.current = false
-      cancelAnimationFrame(rafId.current)
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [])
+  const { width, handleDragStart } = useHorizontalResize({ initial: 560, min: 320 })
 
   const { oldLines, newLines, maxLines } = useMemo(() => {
     const old = oldString?.split('\n') ?? []

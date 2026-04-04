@@ -4,13 +4,14 @@ import { cn } from '@/lib/utils'
 import { Markdown, Reasoning } from './ai-elements'
 import InlineToolCall from './InlineToolCall'
 import { useThinkingVerb } from '../hooks/useThinkingVerb'
-import type { Message, ContentBlock, PermissionMode } from '../App'
+import type { Message, ContentBlock, PermissionMode, ToolBlock } from '../App'
 
 interface ChatAreaProps {
   messages: Message[]
   isLoading: boolean
   permissionMode: PermissionMode
   contentFontSize?: number
+  onToolClick?: (tool: ToolBlock) => void
 }
 
 /** Build display blocks from message, with legacy fallback */
@@ -24,7 +25,7 @@ function getDisplayBlocks(msg: Message): ContentBlock[] {
   return blocks
 }
 
-function ChatArea({ messages, isLoading, permissionMode, contentFontSize = 14 }: ChatAreaProps): JSX.Element {
+function ChatArea({ messages, isLoading, permissionMode, contentFontSize = 14, onToolClick }: ChatAreaProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastSnapshotRef = useRef('')
   const prevMsgCount = useRef(0)
@@ -137,38 +138,63 @@ function ChatArea({ messages, isLoading, permissionMode, contentFontSize = 14 }:
             return (
               <div key={msg.id} className="flex justify-start">
                 <div className="text-td-text-secondary w-full max-w-[85%] rounded-lg px-4 py-3">
-                  {/* Render blocks in chronological order */}
+                  {/* Render blocks in chronological order, grouping consecutive tool_use */}
                   {blocks.length > 0 && (
                     <div className="space-y-2">
-                      {blocks.map((block, blockIdx) => {
-                        const isLastBlock = blockIdx === blocks.length - 1
+                      {(() => {
+                        const rendered: JSX.Element[] = []
+                        let i = 0
+                        while (i < blocks.length) {
+                          const block = blocks[i]
+                          const isLastBlock = i === blocks.length - 1
 
-                        switch (block.type) {
-                          case 'thinking':
-                            return (
+                          if (block.type === 'thinking') {
+                            rendered.push(
                               <Reasoning
-                                key={blockIdx}
+                                key={i}
                                 content={block.thinking}
                                 isStreaming={isAssistantLoading && isLastBlock}
                                 thinkingVerb={thinkingVerb}
                               />
                             )
-                          case 'text':
-                            return (
-                              <Markdown key={blockIdx} content={block.text} fontSize={contentFontSize} />
+                            i++
+                          } else if (block.type === 'text') {
+                            rendered.push(
+                              <Markdown key={i} content={block.text} fontSize={contentFontSize} />
                             )
-                          case 'tool_use':
-                            return (
-                              <InlineToolCall
-                                key={block.tool.id}
-                                tool={block.tool}
-                                isActive={isAssistantLoading && isLastBlock}
-                              />
+                            i++
+                          } else if (block.type === 'tool_use') {
+                            // Collect consecutive tool_use blocks into a group
+                            const toolGroup: { tool: ToolBlock; globalIdx: number }[] = []
+                            while (i < blocks.length && blocks[i].type === 'tool_use') {
+                              const tb = blocks[i] as { type: 'tool_use'; tool: ToolBlock }
+                              toolGroup.push({ tool: tb.tool, globalIdx: i })
+                              i++
+                            }
+                            const groupLastIdx = toolGroup[toolGroup.length - 1].globalIdx
+                            rendered.push(
+                              <div key={`tg-${toolGroup[0].tool.id}`} className="rounded-lg border border-td-border/40 bg-td-bg/30 overflow-hidden">
+                                <div className="px-3 py-1.5 border-b border-td-border/30 text-[10px] font-medium uppercase tracking-wider text-td-muted">
+                                  Tool calls ({toolGroup.length})
+                                </div>
+                                <div className="px-3 py-1.5 space-y-0.5">
+                                  {toolGroup.map(({ tool, globalIdx }) => (
+                                    <InlineToolCall
+                                      key={tool.id}
+                                      tool={tool}
+                                      isActive={isAssistantLoading && globalIdx === blocks.length - 1}
+                                      onToolClick={onToolClick}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
                             )
-                          default:
-                            return null
+                          } else {
+                            i++
+                          }
                         }
-                      })}
+                        return rendered
+                      })()}
                     </div>
                   )}
 

@@ -8,7 +8,7 @@ import {
   Terminal, Zap, Info, Check, Timer, RefreshCw,
   Code2, Bug, Keyboard, BookOpen, Archive, GitFork, BarChart3,
   Key, Eye, EyeOff, ChevronDown, CircleCheck, Cpu, Search, DollarSign,
-  AlertTriangle
+  AlertTriangle, GitBranch, ArrowLeft, ArrowUp
 } from 'lucide-react'
 import { Button } from './ui/button'
 import {
@@ -56,6 +56,12 @@ interface InputBarProps {
   customModel: string
   onCustomModelChange: (model: string) => void
   contextTokens: number
+  gitBranch: string | null
+  gitDiffStats: { additions: number; deletions: number }
+  onCommitChanges: () => void
+  projectPath: string | null
+  onBranchChange: (branch: string) => void
+  worktreePath: string | null
 }
 
 // --- Slash command definitions ---
@@ -168,6 +174,12 @@ function formatContext(tokens: number): string {
 }
 
 // Context window limits per model (tokens)
+const MODEL_SHORT_LABELS: Record<ModelId, string> = {
+  opus: 'Opus 4.6',
+  sonnet: 'Sonnet 4.6',
+  haiku: 'Haiku 4.5'
+}
+
 const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   opus: 1_000_000,
   sonnet: 200_000,
@@ -338,6 +350,144 @@ function OpenRouterModelPicker({
   )
 }
 
+function BranchPicker({
+  currentBranch, projectPath, onBranchChange
+}: {
+  currentBranch: string
+  projectPath: string | null
+  onBranchChange: (branch: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [branches, setBranches] = useState<{ name: string; current: boolean }[]>([])
+  const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!open || !projectPath) return
+    setLoading(true)
+    setSearch('')
+    window.api.gitBranches(projectPath).then((result) => {
+      if (result.success) setBranches(result.branches)
+      setLoading(false)
+    })
+  }, [open, projectPath])
+
+  useEffect(() => {
+    if (open && searchRef.current) {
+      setTimeout(() => searchRef.current?.focus(), 50)
+    }
+  }, [open])
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return branches
+    const q = search.toLowerCase()
+    return branches.filter(b => b.name.toLowerCase().includes(q))
+  }, [branches, search])
+
+  const exactMatch = branches.some(b => b.name === search.trim())
+
+  const handleSwitch = async (branch: string) => {
+    if (!projectPath || branch === currentBranch) { setOpen(false); return }
+    const result = await window.api.gitCheckout(projectPath, branch)
+    if (result.success) {
+      onBranchChange(branch)
+    }
+    setOpen(false)
+  }
+
+  const handleCreate = async () => {
+    if (!projectPath || !search.trim()) return
+    setCreating(true)
+    const result = await window.api.gitCreateBranch(projectPath, search.trim())
+    if (result.success) {
+      onBranchChange(search.trim())
+    }
+    setCreating(false)
+    setOpen(false)
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex items-center gap-1 text-td-text font-semibold hover:text-td-accent transition-colors cursor-pointer"
+        >
+          {currentBranch}
+          <ChevronDown className="h-2.5 w-2.5 text-td-muted" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="w-72 p-0">
+        <div className="p-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-td-muted" />
+            <input
+              ref={searchRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  if (filtered.length > 0) handleSwitch(filtered[0].name)
+                  else if (search.trim()) handleCreate()
+                }
+              }}
+              placeholder="Search or create branch..."
+              className="w-full bg-td-bg border border-td-border rounded-md pl-7 pr-3 py-1.5 text-xs text-td-text placeholder-td-muted/50 outline-none focus:border-td-accent/50"
+            />
+          </div>
+        </div>
+        <div className="max-h-48 overflow-y-auto border-t border-td-border/50">
+          {loading ? (
+            <div className="flex items-center justify-center py-4 text-td-muted">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            </div>
+          ) : filtered.length === 0 && !search.trim() ? (
+            <div className="px-3 py-3 text-xs text-td-muted text-center">No branches found</div>
+          ) : (
+            <>
+              {filtered.map((b) => (
+                <button
+                  key={b.name}
+                  type="button"
+                  className={cn(
+                    'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
+                    b.name === currentBranch
+                      ? 'bg-td-accent/10 text-td-text'
+                      : 'text-td-text-secondary hover:bg-td-hover'
+                  )}
+                  onClick={() => handleSwitch(b.name)}
+                >
+                  <GitBranch className="h-3 w-3 text-td-muted shrink-0" />
+                  <span className="flex-1 truncate font-mono">{b.name}</span>
+                  {b.name === currentBranch && <Check className="h-3 w-3 text-td-accent shrink-0" />}
+                </button>
+              ))}
+              {search.trim() && !exactMatch && (
+                <button
+                  type="button"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left text-emerald-400 hover:bg-td-hover transition-colors border-t border-td-border/50"
+                  onClick={handleCreate}
+                  disabled={creating}
+                >
+                  {creating
+                    ? <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                    : <Plus className="h-3 w-3 shrink-0" />
+                  }
+                  <span className="font-mono truncate">Create &ldquo;{search.trim()}&rdquo;</span>
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function ModelConfigPopover({
   selectedModel, onModelChange,
   customModel, onCustomModelChange,
@@ -347,14 +497,17 @@ function ModelConfigPopover({
   customModel: string
   onCustomModelChange: (m: string) => void
 }) {
-  const displayModel = MODEL_LABELS[selectedModel]
+  const shortLabel = MODEL_SHORT_LABELS[selectedModel]
+  const ctxLabel = formatContext(MODEL_CONTEXT_LIMITS[selectedModel] || 200_000)
 
   return (
     <Popover>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5 text-td-muted hover:text-td-text font-medium px-2">
-          <Sparkles className="h-3 w-3 text-orange-400" />
-          <span className="hidden sm:inline truncate max-w-[160px]">{displayModel}</span>
+          {customModel
+            ? <span className="truncate max-w-[140px] font-mono text-[11px]">{customModel.split('/').pop()}</span>
+            : <span>{shortLabel} {ctxLabel}</span>
+          }
           <ChevronDown className="h-2.5 w-2.5 opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -429,6 +582,47 @@ function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
+const BORDER_COLORS: Record<string, string> = {
+  full: '#10b981',
+  plan: '#3b82f6',
+  approve: '#f59e0b',
+  default: '#6b7280'
+}
+
+function AnimatedBorder({ permissionMode, isDragging, children }: {
+  permissionMode: PermissionMode
+  isDragging: boolean
+  children: React.ReactNode
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const angle = useRef(0)
+  const raf = useRef(0)
+
+  const color = isDragging ? '#3b82f6' : (BORDER_COLORS[permissionMode] || BORDER_COLORS.default)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const tick = () => {
+      angle.current = (angle.current + 0.42) % 360
+      el.style.background = `conic-gradient(from ${angle.current}deg, ${color}20 0deg, ${color}20 140deg, ${color} 180deg, ${color}20 220deg, ${color}20 360deg)`
+      raf.current = requestAnimationFrame(tick)
+    }
+    raf.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf.current)
+  }, [color])
+
+  return (
+    <div
+      ref={ref}
+      className="rounded-xl p-[1.5px]"
+      style={{ background: `${color}20` }}
+    >
+      {children}
+    </div>
+  )
+}
+
 function InputBar({
   conversationId, onSend, onCancel, onNewChat, onClearConversation,
   onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile,
@@ -438,7 +632,8 @@ function InputBar({
   useWorktree, onUseWorktreeChange, onShowUsage,
   apiMode, onApiModeChange, apiProvider, onApiProviderChange,
   apiKey, onApiKeyChange, customModel, onCustomModelChange,
-  contextTokens
+  contextTokens, gitBranch, gitDiffStats, onCommitChanges,
+  projectPath, onBranchChange, worktreePath
 }: InputBarProps): JSX.Element {
   const [text, setText] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
@@ -858,7 +1053,6 @@ function InputBar({
   return (
     <TooltipProvider delayDuration={200}>
       <div className="bg-td-bg">
-        <div className="mx-2 h-px bg-td-border" />
         <div className="px-6 py-3">
         <div className="max-w-3xl mx-auto">
           <form onSubmit={handleSubmit} className="w-full">
@@ -956,24 +1150,79 @@ function InputBar({
                 </div>
               )}
 
+              <AnimatedBorder permissionMode={permissionMode} isDragging={isDragging}>
               <div
-                className={cn(
-                  'rounded-xl border bg-td-surface overflow-hidden transition-colors',
-                  isDragging
-                    ? 'border-td-accent bg-td-accent/5'
-                    : permissionMode === 'plan'
-                      ? 'border-blue-500/40 focus-within:border-blue-500/60'
-                      : permissionMode === 'full'
-                        ? 'border-emerald-500/30 focus-within:border-emerald-500/50'
-                        : permissionMode === 'approve'
-                          ? 'border-amber-500/30 focus-within:border-amber-500/50'
-                          : 'border-td-border focus-within:border-td-muted/50'
-                )}
+                className="rounded-xl overflow-hidden bg-td-input-bg"
                 onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
               >
-              {/* Image previews (header) */}
+
+              {/* Git info bar (above textarea) */}
+              {gitBranch && (
+                <div className="flex items-center justify-between px-4 py-2 border-b border-td-border/30 bg-td-bg">
+                  <div className="flex items-center gap-2 text-xs">
+                    <GitBranch className="h-3.5 w-3.5 text-td-muted" />
+                    <span className="text-td-muted">Branch</span>
+                    <span className="text-td-muted/50">&larr;</span>
+                    <BranchPicker
+                      currentBranch={gitBranch}
+                      projectPath={projectPath}
+                      onBranchChange={onBranchChange}
+                    />
+                    {/* Worktree: toggle for new chats, indicator for existing */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className={cn(
+                            'flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-md border transition-colors',
+                            (useWorktree && !conversationId) || worktreePath
+                              ? 'border-purple-500/30 bg-purple-500/10 text-purple-400'
+                              : 'border-td-border/60 bg-td-bg/50 text-td-muted hover:text-td-text hover:border-td-muted'
+                          )}
+                          onClick={() => { if (!conversationId) onUseWorktreeChange(!useWorktree) }}
+                        >
+                          <GitFork className="h-3 w-3" />
+                          Worktree
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        {worktreePath
+                          ? <p className="font-mono text-[10px]">{worktreePath}</p>
+                          : conversationId
+                            ? 'Not using a worktree'
+                            : useWorktree
+                              ? 'Chat will run in a new git worktree'
+                              : 'Use an isolated git worktree for this chat'
+                        }
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {(gitDiffStats.additions > 0 || gitDiffStats.deletions > 0) && (
+                      <>
+                        <span className="text-[11px] px-2 py-0.5 rounded-md border border-td-border/60 bg-td-bg/50 font-mono tabular-nums">
+                          <span className="text-emerald-400">+{gitDiffStats.additions}</span>
+                          {' '}
+                          <span className="text-red-400">-{gitDiffStats.deletions}</span>
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-[11px] px-2.5 text-td-muted hover:text-td-text font-medium"
+                          onClick={(e) => { e.preventDefault(); onCommitChanges() }}
+                        >
+                          Commit changes
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Image previews */}
               {images.length > 0 && (
                 <div className="flex flex-wrap gap-2 px-3 pt-3 pb-1">
                   {images.map((img) => (
@@ -1023,6 +1272,7 @@ function InputBar({
 
               {/* Footer */}
               <div className="flex items-center justify-between px-2 py-1.5">
+                {/* Left side: + button, permission mode */}
                 <div className="flex items-center gap-0.5 min-w-0">
                   {/* Action menu with file upload */}
                   <DropdownMenu>
@@ -1077,45 +1327,11 @@ function InputBar({
                     onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }}
                   />
 
-                  {/* Model & API config popover */}
-                  <ModelConfigPopover
-                    selectedModel={selectedModel}
-                    onModelChange={onModelChange}
-                    apiMode={apiMode}
-                    onApiModeChange={onApiModeChange}
-                    apiProvider={apiProvider}
-                    onApiProviderChange={onApiProviderChange}
-                    apiKey={apiKey}
-                    onApiKeyChange={onApiKeyChange}
-                    customModel={customModel}
-                    onCustomModelChange={onCustomModelChange}
-                  />
-
-                  {/* Effort */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-td-muted hover:text-td-text font-medium px-2">
-                        <Gauge className="h-3 w-3" />
-                        {EFFORT_LABELS[effortLevel]}
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent side="top" align="start">
-                      <DropdownMenuLabel>Thinking effort</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuRadioGroup value={effortLevel} onValueChange={(v) => onEffortChange(v as EffortLevel)}>
-                        <DropdownMenuRadioItem value="max">Max</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="high">High</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="medium">Medium</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="low">Low</DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-
-                  {/* Permission mode & tools */}
+                  {/* Permission mode */}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="sm" className={cn(
-                        'h-7 text-xs gap-1 font-medium px-2 transition-colors',
+                        'h-7 text-xs gap-1.5 font-medium px-2 transition-colors',
                         permissionMode === 'full'
                           ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10'
                           : permissionMode === 'approve'
@@ -1128,10 +1344,9 @@ function InputBar({
                           : permissionMode === 'approve' ? <ShieldCheck className="h-3 w-3" />
                           : permissionMode === 'plan' ? <MapIcon className="h-3 w-3" />
                           : <ShieldQuestion className="h-3 w-3" />}
-                        <span className="hidden sm:inline">
-                          {PERMISSION_LABELS[permissionMode]}
-                          {disabledTools.size > 0 && ` (-${disabledTools.size})`}
-                        </span>
+                        {PERMISSION_LABELS[permissionMode]}
+                        {disabledTools.size > 0 && <span className="text-td-muted">(-{disabledTools.size})</span>}
+                        <ChevronDown className="h-2.5 w-2.5 opacity-50" />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent side="top" align="start">
@@ -1142,33 +1357,6 @@ function InputBar({
                       </DropdownMenuRadioGroup>
                     </DropdownMenuContent>
                   </DropdownMenu>
-
-                  {/* Worktree toggle (only for new chats) */}
-                  {!conversationId && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className={cn(
-                              'h-7 text-xs gap-1 font-medium px-2 transition-colors',
-                              useWorktree
-                                ? 'text-purple-400 hover:text-purple-300 hover:bg-purple-500/10'
-                                : 'text-td-muted hover:text-td-text'
-                            )}
-                            onClick={() => onUseWorktreeChange(!useWorktree)}
-                          >
-                            <GitFork className="h-3 w-3" />
-                            <span className="hidden sm:inline">Worktree</span>
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top">
-                          {useWorktree ? 'Chat will run in a new git worktree' : 'Click to use a git worktree for this chat'}
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
 
                   {/* Queued messages */}
                   {queuedMessages.length > 0 && (
@@ -1188,7 +1376,6 @@ function InputBar({
                   {/* Context usage indicator */}
                   {contextTokens > 0 && (() => {
                     const ctx = getContextStatus(contextTokens, selectedModel)
-                    // Only show when above 50%
                     if (ctx.level === 'ok') return null
                     return (
                       <Tooltip>
@@ -1232,41 +1419,69 @@ function InputBar({
                   })()}
                 </div>
 
-                {/* Submit / Stop */}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    {status === 'streaming' && !text.trim() && images.length === 0 ? (
-                      <Button
-                        type="button"
-                        onClick={onCancel}
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 shrink-0 gap-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/10 px-2 rounded-lg"
-                      >
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        <Square className="h-2.5 w-2.5 fill-current" />
-                      </Button>
-                    ) : (
-                      <Button
-                        type="submit"
-                        size="icon"
-                        variant={(text.trim() || images.length > 0) ? 'default' : 'ghost'}
-                        className={cn(
-                          'h-7 w-7 rounded-lg shrink-0 transition-all',
-                          !(text.trim() || images.length > 0) && 'text-td-muted'
-                        )}
-                        disabled={status === 'ready' && !text.trim() && images.length === 0}
-                      >
-                        <CornerDownLeft className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    {status === 'streaming' && !text.trim() && images.length === 0 ? 'Stop generation' : isLoading ? 'Queue message' : 'Send message'}
-                  </TooltipContent>
-                </Tooltip>
+                {/* Right side: model selector + send button */}
+                <div className="flex items-center gap-1 shrink-0">
+                  {/* Model selector (compact) */}
+                  <ModelConfigPopover
+                    selectedModel={selectedModel}
+                    onModelChange={onModelChange}
+                    customModel={customModel}
+                    onCustomModelChange={onCustomModelChange}
+                  />
+
+                  {/* Submit / Stop — color matches permission mode */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      {status === 'streaming' && !text.trim() && images.length === 0 ? (
+                        <Button
+                          type="button"
+                          onClick={onCancel}
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            'h-7 shrink-0 gap-1.5 px-2 rounded-lg',
+                            permissionMode === 'full'
+                              ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10'
+                              : permissionMode === 'plan'
+                                ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
+                                : permissionMode === 'approve'
+                                  ? 'text-amber-400 hover:text-amber-300 hover:bg-amber-500/10'
+                                  : 'text-td-muted hover:text-td-text'
+                          )}
+                        >
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          <Square className="h-2.5 w-2.5 fill-current" />
+                        </Button>
+                      ) : (
+                        <Button
+                          type="submit"
+                          size="icon"
+                          className={cn(
+                            'h-7 w-7 rounded-full shrink-0 transition-all',
+                            !(text.trim() || images.length > 0)
+                              ? 'bg-td-muted/20 text-td-muted'
+                              : permissionMode === 'full'
+                                ? 'bg-emerald-500 text-white hover:bg-emerald-400'
+                                : permissionMode === 'plan'
+                                  ? 'bg-blue-500 text-white hover:bg-blue-400'
+                                  : permissionMode === 'approve'
+                                    ? 'bg-amber-500 text-white hover:bg-amber-400'
+                                    : 'bg-td-accent text-white hover:bg-td-accent/90'
+                          )}
+                          disabled={status === 'ready' && !text.trim() && images.length === 0}
+                        >
+                          <ArrowUp className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      {status === 'streaming' && !text.trim() && images.length === 0 ? 'Stop generation' : isLoading ? 'Queue message' : 'Send message'}
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
               </div>
-            </div>
+              </div>
+              </AnimatedBorder>
             </div>
           </form>
         </div>

@@ -337,6 +337,13 @@ export class AcpClientManager {
     }
   }
 
+  getProcessInfo(): { pid: number | null; sessions: number } {
+    return {
+      pid: this.agentProcess?.pid ?? null,
+      sessions: this.conversationToSession.size
+    }
+  }
+
   async shutdown(): Promise<void> {
     // Clear all pending permission timers
     this.pendingPermissions.forEach((pending) => clearTimeout(pending.timeoutId))

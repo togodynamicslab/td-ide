@@ -136,7 +136,7 @@ export default function CommandsSettings({ homedir, projectPath, fixedScope }: C
         ) : (
           <div className="flex min-h-[400px]">
             {/* Command list */}
-            <div className="w-48 shrink-0 border-r border-td-border overflow-y-auto">
+            <div className="w-56 shrink-0 border-r border-td-border overflow-y-auto">
               {commands.map((cmd) => (
                 <button
                   key={cmd.filename}

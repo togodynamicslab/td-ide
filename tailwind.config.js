@@ -17,7 +17,8 @@ module.exports = {
           'text-secondary': 'rgb(var(--td-text-secondary) / <alpha-value>)',
           'text-tertiary': 'rgb(var(--td-text-tertiary) / <alpha-value>)',
           'text-faint': 'rgb(var(--td-text-faint) / <alpha-value>)',
-          'code-inline': 'rgb(var(--td-code-inline) / <alpha-value>)'
+          'code-inline': 'rgb(var(--td-code-inline) / <alpha-value>)',
+          'input-bg': 'rgb(var(--td-input-bg) / <alpha-value>)'
         }
       },
       keyframes: {

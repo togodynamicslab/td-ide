@@ -17,7 +17,8 @@ import {
   ArchiveRestore,
   GitFork,
   AlertTriangle,
-  Wrench
+  Wrench,
+  PanelLeftClose
 } from 'lucide-react'
 import WindowControls from './WindowControls'
 import MemoryIndicator from './StatusBar'
@@ -37,7 +38,8 @@ import {
   SidebarMenuButton,
   SidebarMenuSub,
   SidebarMenuSubItem,
-  SidebarMenuSubButton
+  SidebarMenuSubButton,
+  useSidebar
 } from './ui/sidebar'
 import {
   ContextMenu,
@@ -120,6 +122,7 @@ function AppSidebar({
   const prevLoadingRef = useRef<Set<string>>(new Set())
   const editInputRef = useRef<HTMLInputElement>(null)
   const { theme, toggleTheme } = useTheme()
+  const { toggleSidebar } = useSidebar()
 
   // Track conversations that just finished loading → show checkmark until clicked
   useEffect(() => {
@@ -222,14 +225,24 @@ function AppSidebar({
               Alpha
             </span>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={onNewChat} className="titlebar-no-drag h-6 w-6">
-                <Plus className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">New chat</TooltipContent>
-          </Tooltip>
+          <div className="flex items-center gap-0.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" onClick={onNewChat} className="titlebar-no-drag h-6 w-6">
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">New chat</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" onClick={toggleSidebar} className="titlebar-no-drag h-6 w-6">
+                  <PanelLeftClose className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Collapse sidebar (Cmd+B)</TooltipContent>
+            </Tooltip>
+          </div>
         </SidebarHeader>
 
         <SidebarSeparator />

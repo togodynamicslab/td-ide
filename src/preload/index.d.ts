@@ -22,6 +22,7 @@ interface ClaudeAPI {
   listDirectory: (dirPath: string) => Promise<{ files: { name: string; isDirectory: boolean }[] }>
   deleteFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
   getHomedir: () => Promise<string>
+  findLatestPlanFile: () => Promise<string | null>
 
   // Dialog / files
   openFolder: () => Promise<string | null>
@@ -30,6 +31,7 @@ interface ClaudeAPI {
 
   // Git
   gitStatus: (cwd: string) => Promise<{ isRepo: boolean; branch: string | null }>
+  gitDiffStats: (cwd: string) => Promise<{ additions: number; deletions: number }>
   gitInit: (cwd: string) => Promise<{ success: boolean; branch?: string; error?: string }>
   gitBranches: (cwd: string) => Promise<{ success: boolean; branches: { name: string; current: boolean }[] }>
   gitCheckout: (cwd: string, branch: string) => Promise<{ success: boolean; error?: string }>
@@ -91,7 +93,7 @@ interface ClaudeAPI {
   getAllAppState: () => Promise<Record<string, string>>
   getMemoryUsage: () => Promise<{
     main: { rss: number; heapUsed: number; heapTotal: number }
-    claude: { conversationId: string; rss: number }[]
+    agent: { pid: number | null; rss: number; sessions: number }
   }>
   getInterruptedProcesses: () => Promise<{ conversationId: string; pid: number; startedAt: number; alive: boolean }[]>
   killOrphanProcess: (pid: number) => Promise<{ success: boolean }>

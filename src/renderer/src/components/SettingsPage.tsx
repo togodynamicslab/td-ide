@@ -95,7 +95,7 @@ function SettingsPage({ project, homedir, scope, onClose, contentFontSize, onCon
 
         {/* Content area */}
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-2xl mx-auto px-6 py-8">
+          <div className="max-w-5xl mx-auto px-6 py-8">
             {activeSection === 'mcp' && (
               <>
                 <div className="mb-8">

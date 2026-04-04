@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import {
-  ChevronRight, FileText, Terminal, Globe, Search,
-  Edit3, FolderOpen, Brain, Wrench, Eye, Loader2
+  ChevronRight, Terminal, Globe, Search,
+  Edit3, Brain, Wrench, Eye, Loader2
 } from 'lucide-react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { cn } from '@/lib/utils'
+import { getToolDetail, normalizeToolName } from '@/lib/tool-meta'
 import type { ToolBlock } from '../App'
 
 interface ToolGroup {
   label: string
-  icon: typeof FileText
+  icon: typeof Eye
   color: string
   tools: ToolBlock[]
 }
@@ -19,7 +20,7 @@ function categorize(tools: ToolBlock[]): ToolGroup[] {
 
   for (const tool of tools) {
     let category: string
-    switch (tool.name) {
+    switch (normalizeToolName(tool.name)) {
       case 'Read':
         category = 'read'
         break
@@ -50,7 +51,7 @@ function categorize(tools: ToolBlock[]): ToolGroup[] {
   }
 
   const order = ['read', 'search', 'web', 'bash', 'write', 'agent', 'other']
-  const config: Record<string, { label: (n: number) => string; icon: typeof FileText; color: string }> = {
+  const config: Record<string, { label: (n: number) => string; icon: typeof Eye; color: string }> = {
     read: { label: (n) => n === 1 ? 'Read 1 file' : `Read ${n} files`, icon: Eye, color: 'text-blue-400' },
     write: { label: (n) => n === 1 ? 'Modified 1 file' : `Modified ${n} files`, icon: Edit3, color: 'text-green-400' },
     bash: { label: (n) => n === 1 ? 'Ran 1 command' : `Ran ${n} commands`, icon: Terminal, color: 'text-yellow-400' },
@@ -68,33 +69,6 @@ function categorize(tools: ToolBlock[]): ToolGroup[] {
       color: config[key].color,
       tools: groups[key]
     }))
-}
-
-function getToolDetail(tool: ToolBlock): string {
-  const input = tool.input
-  switch (tool.name) {
-    case 'Read':
-      return String(input.file_path || '').split(/[/\\]/).pop() || 'file'
-    case 'Edit':
-    case 'Write':
-      return String(input.file_path || '').split(/[/\\]/).pop() || 'file'
-    case 'Bash':
-      return String(input.command || '').slice(0, 80) || 'command'
-    case 'WebFetch':
-      return String(input.url || '').replace(/^https?:\/\//, '').slice(0, 60) || 'url'
-    case 'WebSearch':
-      return String(input.query || '').slice(0, 60) || 'search'
-    case 'Glob':
-      return String(input.pattern || '') || 'pattern'
-    case 'Grep':
-      return String(input.pattern || '') || 'pattern'
-    case 'Agent': {
-      const desc = (input.description as string) || ''
-      return desc.slice(0, 60) || 'subtask'
-    }
-    default:
-      return tool.name
-  }
 }
 
 function ToolGroupItem({ group }: { group: ToolGroup }): JSX.Element {
@@ -126,7 +100,6 @@ export default function ToolSummary({ tools, isActive = false }: { tools: ToolBl
   const [open, setOpen] = useState(false)
   const groups = categorize(tools)
 
-  // Build one-line summary
   const summary = groups.map((g) => g.label).join(' · ')
 
   return (

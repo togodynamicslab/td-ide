@@ -1,133 +1,118 @@
-import { useState } from 'react'
-import {
-  ChevronRight, Terminal, Globe, Search,
-  Edit3, Brain, Wrench, Eye, Loader2
-} from 'lucide-react'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getToolMeta, normalizeToolName } from '@/lib/tool-meta'
 import type { ToolBlock } from '../App'
-
-const toolConfig: Record<string, { icon: typeof Eye; color: string; label: (t: ToolBlock) => string }> = {
-  Read: {
-    icon: Eye,
-    color: 'text-blue-400',
-    label: (t) => {
-      const file = String(t.input.file_path || '').split(/[/\\]/).pop() || 'file'
-      return `Read ${file}`
-    }
-  },
-  Edit: {
-    icon: Edit3,
-    color: 'text-green-400',
-    label: (t) => {
-      const file = String(t.input.file_path || '').split(/[/\\]/).pop() || 'file'
-      return `Edited ${file}`
-    }
-  },
-  Write: {
-    icon: Edit3,
-    color: 'text-green-400',
-    label: (t) => {
-      const file = String(t.input.file_path || '').split(/[/\\]/).pop() || 'file'
-      return `Wrote ${file}`
-    }
-  },
-  Bash: {
-    icon: Terminal,
-    color: 'text-yellow-400',
-    label: (t) => {
-      const cmd = String(t.input.command || '').slice(0, 60)
-      return cmd || 'Ran command'
-    }
-  },
-  Glob: {
-    icon: Search,
-    color: 'text-cyan-400',
-    label: (t) => `Glob ${String(t.input.pattern || '')}`
-  },
-  Grep: {
-    icon: Search,
-    color: 'text-cyan-400',
-    label: (t) => `Grep ${String(t.input.pattern || '')}`
-  },
-  WebFetch: {
-    icon: Globe,
-    color: 'text-purple-400',
-    label: (t) => `Fetched ${String(t.input.url || '').replace(/^https?:\/\//, '').slice(0, 50)}`
-  },
-  WebSearch: {
-    icon: Globe,
-    color: 'text-purple-400',
-    label: (t) => `Searched "${String(t.input.query || '').slice(0, 50)}"`
-  },
-  Agent: {
-    icon: Brain,
-    color: 'text-orange-400',
-    label: (t) => String((t.input.description as string) || 'Subtask').slice(0, 60)
-  }
-}
-
-function getConfig(name: string) {
-  return toolConfig[name] || { icon: Wrench, color: 'text-td-text-tertiary', label: (t: ToolBlock) => t.name }
-}
 
 interface InlineToolCallProps {
   tool: ToolBlock
   isActive?: boolean
+  onToolClick?: (tool: ToolBlock) => void
 }
 
-export default function InlineToolCall({ tool, isActive = false }: InlineToolCallProps): JSX.Element {
-  const [open, setOpen] = useState(false)
-  const config = getConfig(tool.name)
-  const Icon = config.icon
+function getStatusLabel(tool: ToolBlock): string {
+  const name = normalizeToolName(tool.name)
+  const status = tool.input._status as string | undefined
+  const isComplete = status === 'completed' || status === 'success' || tool.input._output !== undefined
+  const isFailed = status === 'error' || status === 'failed'
 
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className={cn(
-        'flex items-center gap-2 w-full text-left py-1 px-2.5 rounded-md border transition-colors text-xs',
-        isActive
-          ? 'border-td-accent/30 bg-td-bg/50'
-          : 'border-td-border/40 bg-td-bg/30 hover:bg-td-hover/30'
-      )}>
-        {isActive ? (
-          <Loader2 className="h-3 w-3 text-td-accent animate-spin shrink-0" />
-        ) : (
-          <ChevronRight className={cn(
-            'h-2.5 w-2.5 text-td-muted transition-transform duration-200',
-            open && 'rotate-90'
-          )} />
-        )}
-        <Icon className={cn('h-3 w-3 shrink-0', config.color)} />
-        <span className="truncate text-td-text-tertiary">
-          {config.label(tool)}
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="ml-5 mt-1 px-2 py-1.5 rounded bg-td-bg/50 border border-td-border/30 text-[11px] font-mono text-td-muted overflow-x-auto max-h-[200px] overflow-y-auto whitespace-pre-wrap break-all">
-          {formatInput(tool)}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  )
+  if (isFailed) {
+    switch (name) {
+      case 'Bash': return 'Command failed'
+      case 'Read': return 'File read failed'
+      case 'Edit': return 'File edit failed'
+      case 'Write': return 'File write failed'
+      default: return `${tool.name} failed`
+    }
+  }
+
+  if (isComplete) {
+    switch (name) {
+      case 'Bash': return 'Command run complete'
+      case 'Read': return 'File read complete'
+      case 'Edit': return 'File edited'
+      case 'Write': return 'File written'
+      case 'Glob': return 'Search complete'
+      case 'Grep': return 'Search complete'
+      case 'WebFetch': return 'Fetch complete'
+      case 'WebSearch': return 'Search complete'
+      case 'Agent': return 'Agent task complete'
+      default: return `${tool.name} complete`
+    }
+  }
+
+  switch (name) {
+    case 'Bash': return 'Running command'
+    case 'Read': return 'Reading file'
+    case 'Edit': return 'Editing file'
+    case 'Write': return 'Writing file'
+    case 'Glob': return 'Searching files'
+    case 'Grep': return 'Searching content'
+    case 'WebFetch': return 'Fetching URL'
+    case 'WebSearch': return 'Searching web'
+    case 'Agent': return 'Running agent'
+    default: return `Running ${tool.name}`
+  }
 }
 
-function formatInput(tool: ToolBlock): string {
-  const { input } = tool
-  switch (tool.name) {
-    case 'Read':
-      return String(input.file_path || '')
-    case 'Edit':
-      return `${input.file_path || ''}\n---\n- ${String(input.old_string || '').slice(0, 200)}\n+ ${String(input.new_string || '').slice(0, 200)}`
-    case 'Write':
-      return `${input.file_path || ''}\n${String(input.content || '').slice(0, 300)}`
+function getDetail(tool: ToolBlock): string {
+  const name = normalizeToolName(tool.name)
+  const input = tool.input
+  switch (name) {
     case 'Bash':
-      return String(input.command || '')
+      return String(input.command || '').slice(0, 100)
+    case 'Read':
+    case 'Edit':
+    case 'Write':
+      return String(input.file_path || '')
     case 'Glob':
     case 'Grep':
       return `${input.pattern || ''}${input.path ? ` in ${input.path}` : ''}`
+    case 'WebFetch':
+      return String(input.url || '').replace(/^https?:\/\//, '').slice(0, 80)
+    case 'WebSearch':
+      return String(input.query || '').slice(0, 80)
     case 'Agent':
-      return String((input.description as string) || (input.prompt as string) || '').slice(0, 300)
+      return String((input.description as string) || '').slice(0, 80)
     default:
-      return JSON.stringify(input, null, 2).slice(0, 400)
+      return ''
   }
+}
+
+export default function InlineToolCall({ tool, isActive = false, onToolClick }: InlineToolCallProps): JSX.Element {
+  const status = tool.input._status as string | undefined
+  const isComplete = status === 'completed' || status === 'success' || (!isActive && tool.input._output !== undefined)
+  const isFailed = status === 'error' || status === 'failed'
+  const meta = getToolMeta(tool.name)
+
+  const statusLabel = getStatusLabel(tool)
+  const detail = getDetail(tool)
+
+  return (
+    <button
+      type="button"
+      className="flex items-center gap-2 w-full text-left py-0.5 text-xs group cursor-pointer"
+      onClick={() => onToolClick?.(tool)}
+    >
+      {isActive ? (
+        <Loader2 className="h-3 w-3 text-td-accent animate-spin shrink-0" />
+      ) : isFailed ? (
+        <XCircle className="h-3 w-3 text-red-400 shrink-0" />
+      ) : isComplete ? (
+        <CheckCircle2 className={cn('h-3 w-3 shrink-0', meta.color)} />
+      ) : (
+        <CheckCircle2 className="h-3 w-3 text-td-muted shrink-0" />
+      )}
+      <span className={cn(
+        'shrink-0',
+        isFailed ? 'text-red-400' : isActive ? 'text-td-text' : 'text-td-text-secondary'
+      )}>
+        {statusLabel}
+      </span>
+      {detail && (
+        <span className="text-td-muted truncate font-mono group-hover:text-td-text-tertiary transition-colors">
+          {detail}
+        </span>
+      )}
+    </button>
+  )
 }
