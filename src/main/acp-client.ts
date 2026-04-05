@@ -76,7 +76,8 @@ export class AcpClientManager {
 
     this.agentProcess = spawn(agentBin, [], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env }
+      env: { ...process.env },
+      shell: process.platform === 'win32'
     })
 
     this.agentProcess.stderr?.on('data', (data: Buffer) => {
