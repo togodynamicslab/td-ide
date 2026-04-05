@@ -38,6 +38,11 @@ import {
   clearAllActiveProcesses
 } from './db'
 
+// Enable GPU rasterization and performance optimizations
+app.commandLine.appendSwitch('enable-gpu-rasterization')
+app.commandLine.appendSwitch('enable-zero-copy')
+app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization')
+
 let mainWindow: BrowserWindow | null = null
 
 // ACP client manager — single long-lived connection multiplexing all conversations
@@ -59,7 +64,9 @@ function createWindow(): void {
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      backgroundThrottling: false,
+      v8CacheOptions: 'bypassHeatCheck'
     }
   })
 
