@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { Check, X, FileEdit, FilePlus, Terminal, FileCode, ChevronDown, ChevronRight, Shield, ShieldCheck, Eye } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import type { DeniedTool } from '../App'
 
@@ -30,110 +29,76 @@ interface ApprovalWidgetProps {
   onViewDiff?: (data: DiffViewData) => void
 }
 
-function DiffBlock({ oldStr, newStr }: { oldStr: string; newStr: string }) {
-  return (
-    <div className="text-[11px] font-mono leading-4 rounded bg-black/30 overflow-hidden border border-td-border/30">
-      {oldStr.split('\n').map((line, i) => (
-        <div key={`r-${i}`} className="px-2.5 py-0.5 bg-red-500/10 text-red-300 whitespace-pre-wrap break-all">
-          <span className="opacity-40 mr-1.5 select-none">-</span>{line || '\u00A0'}
-        </div>
-      ))}
-      {newStr.split('\n').map((line, i) => (
-        <div key={`a-${i}`} className="px-2.5 py-0.5 bg-emerald-500/10 text-emerald-300 whitespace-pre-wrap break-all">
-          <span className="opacity-40 mr-1.5 select-none">+</span>{line || '\u00A0'}
-        </div>
-      ))}
-    </div>
-  )
-}
+function DiffPreview({ change }: { change: FileChange }) {
+  if (change.action === 'edit' && change.oldString != null && change.newString != null) {
+    const oldLines = change.oldString.split('\n')
+    const newLines = change.newString.split('\n')
+    return (
+      <div className="text-[11px] font-mono leading-[18px] rounded-md bg-black/50 overflow-hidden border border-td-border/20 max-h-48 overflow-y-auto">
+        {oldLines.map((line, i) => (
+          <div key={`r-${i}`} className="flex bg-red-500/15">
+            <span className="w-7 text-right pr-1.5 text-td-muted/30 select-none shrink-0 py-px">{i + 1}</span>
+            <span className="text-red-400 w-4 text-center select-none shrink-0 py-px">-</span>
+            <span className="flex-1 pr-2 py-px text-red-300 whitespace-pre-wrap break-all">{line || '\u00A0'}</span>
+          </div>
+        ))}
+        {newLines.map((line, i) => (
+          <div key={`a-${i}`} className="flex bg-emerald-500/15">
+            <span className="w-7 text-right pr-1.5 text-td-muted/30 select-none shrink-0 py-px">{oldLines.length + i + 1}</span>
+            <span className="text-emerald-400 w-4 text-center select-none shrink-0 py-px">+</span>
+            <span className="flex-1 pr-2 py-px text-emerald-300 whitespace-pre-wrap break-all">{line || '\u00A0'}</span>
+          </div>
+        ))}
+      </div>
+    )
+  }
 
-function ToolDetail({ change }: { change: FileChange }) {
-  const [expanded, setExpanded] = useState(false)
-  const hasDetail = change.action === 'edit' && change.oldString != null && change.newString != null
-    || change.command
-    || change.newContent
+  if (change.action === 'execute' && change.command) {
+    return (
+      <div className="text-[11px] font-mono p-2.5 rounded-md bg-black/40 text-blue-300 border border-td-border/30">
+        $ {change.command}
+      </div>
+    )
+  }
 
-  return (
-    <div>
-      {/* Summary line — always visible */}
-      <div className="flex items-center gap-2 text-xs">
-        {change.action === 'write' && <FilePlus className="h-3.5 w-3.5 text-emerald-400 shrink-0" />}
-        {change.action === 'edit' && <FileEdit className="h-3.5 w-3.5 text-amber-400 shrink-0" />}
-        {change.action === 'execute' && <Terminal className="h-3.5 w-3.5 text-blue-400 shrink-0" />}
-        {change.action === 'other' && <FileCode className="h-3.5 w-3.5 text-td-muted shrink-0" />}
-
-        <span className={cn(
-          'font-mono text-[11px]',
-          change.action === 'execute' ? 'text-blue-300' : 'text-td-text'
-        )}>
-          {change.action === 'execute' && change.command
-            ? `$ ${change.command.length > 80 ? change.command.slice(0, 80) + '...' : change.command}`
-            : change.filePath}
-        </span>
-
-        <span className={cn(
-          'text-[10px] px-1.5 py-0.5 rounded font-medium',
-          change.action === 'write' ? 'bg-emerald-500/15 text-emerald-400' :
-          change.action === 'edit' ? 'bg-amber-500/15 text-amber-400' :
-          change.action === 'execute' ? 'bg-blue-500/15 text-blue-400' :
-          'bg-td-border text-td-muted'
-        )}>
-          {change.action === 'write' ? 'Create' :
-           change.action === 'edit' ? 'Edit' :
-           change.action === 'execute' ? 'Run' :
-           change.tool.tool_name}
-        </span>
-
-        {hasDetail && (
-          <button
-            type="button"
-            onClick={() => setExpanded(!expanded)}
-            className="text-td-muted hover:text-td-text ml-auto"
-          >
-            {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          </button>
+  if (change.action === 'write' && change.newContent != null) {
+    const lines = change.newContent.split('\n').slice(0, 15)
+    const total = change.newContent.split('\n').length
+    return (
+      <div className="text-[11px] font-mono leading-[18px] rounded-md bg-black/50 overflow-hidden border border-td-border/20 max-h-48 overflow-y-auto">
+        {lines.map((line, i) => (
+          <div key={i} className="flex bg-emerald-500/15">
+            <span className="w-7 text-right pr-1.5 text-td-muted/30 select-none shrink-0 py-px">{i + 1}</span>
+            <span className="text-emerald-400 w-4 text-center select-none shrink-0 py-px">+</span>
+            <span className="flex-1 pr-2 py-px text-emerald-300 whitespace-pre-wrap break-all">{line || '\u00A0'}</span>
+          </div>
+        ))}
+        {total > 15 && (
+          <div className="px-2.5 py-1 text-td-muted text-[10px]">... {total - 15} more lines</div>
         )}
       </div>
+    )
+  }
 
-      {/* Expanded detail */}
-      {expanded && (
-        <div className="mt-1.5 ml-5.5">
-          {change.action === 'edit' && change.oldString != null && change.newString != null ? (
-            <DiffBlock oldStr={change.oldString} newStr={change.newString} />
-          ) : change.command ? (
-            <div className="text-[11px] font-mono p-2 rounded bg-black/30 text-blue-300 border border-td-border/30">
-              $ {change.command}
-            </div>
-          ) : change.newContent != null ? (
-            <div className="text-[11px] font-mono rounded bg-black/30 overflow-hidden max-h-32 overflow-y-auto border border-td-border/30">
-              {change.newContent.split('\n').slice(0, 20).map((line, i) => (
-                <div key={i} className="px-2.5 py-0.5 text-emerald-300/80 whitespace-pre-wrap break-all">
-                  <span className="opacity-40 mr-1.5 select-none">+</span>{line || '\u00A0'}
-                </div>
-              ))}
-              {(change.newContent.split('\n').length > 20) && (
-                <div className="px-2.5 py-1 text-td-muted text-[10px]">... {change.newContent.split('\n').length - 20} more lines</div>
-              )}
-            </div>
-          ) : (
-            <pre className="text-[10px] text-td-muted font-mono whitespace-pre-wrap max-h-32 overflow-y-auto p-2 rounded bg-black/30 border border-td-border/30">
-              {JSON.stringify(change.tool.tool_input, null, 2).slice(0, 500)}
-            </pre>
-          )}
-        </div>
-      )}
-    </div>
+  return null
+}
+
+function Kbd({ children }: { children: string }) {
+  return (
+    <span className="inline-flex items-center justify-center h-[18px] min-w-[18px] px-1 rounded bg-td-surface border border-td-border text-[10px] font-mono text-td-text-tertiary">
+      {children}
+    </span>
   )
 }
 
-const actionLabels: Record<FileChange['action'], string> = {
-  write: 'Create file',
-  edit: 'Edit file',
-  execute: 'Run command',
-  other: 'Use tool'
+const actionVerbs: Record<FileChange['action'], string> = {
+  write: 'Create',
+  edit: 'Edit',
+  execute: 'Run',
+  other: 'Use'
 }
 
-function ApprovalWidget({ denials, onApprove, onApproveAll, onReject, onViewDiff }: ApprovalWidgetProps) {
+function ApprovalWidget({ denials, onApprove, onApproveAll, onReject }: ApprovalWidgetProps) {
   const [decided, setDecided] = useState(false)
 
   const changes: FileChange[] = denials.map((d) => {
@@ -161,107 +126,92 @@ function ApprovalWidget({ denials, onApprove, onApproveAll, onReject, onViewDiff
     }
   })
 
-  if (decided) {
-    return null
-  }
+  // Keyboard shortcuts: Enter = allow once, Cmd+Enter = always allow, Esc = deny
+  useEffect(() => {
+    if (decided) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setDecided(true)
+        onReject()
+      } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault()
+        setDecided(true)
+        onApproveAll()
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        setDecided(true)
+        onApprove([...denials])
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [decided, denials, onApprove, onApproveAll, onReject])
+
+  if (decided) return null
+
+  const firstChange = changes[0]
+  const fileName = firstChange
+    ? firstChange.action === 'execute'
+      ? firstChange.command?.split(' ')[0] || 'command'
+      : firstChange.filePath.split('/').pop() || firstChange.filePath
+    : 'tool'
+  const verb = firstChange ? actionVerbs[firstChange.action] : 'Use'
+  const isMac = navigator.platform.includes('Mac')
 
   return (
     <div className="px-6 animate-in slide-in-from-bottom-2 fade-in duration-200">
-      <div className="max-w-3xl mx-auto mb-2 rounded-xl border border-amber-500/20 bg-td-surface overflow-hidden shadow-lg shadow-black/10">
-        {/* Header */}
-        <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-td-border/50 bg-amber-500/5">
-          <Shield className="h-4 w-4 text-amber-400 shrink-0" />
-          <span className="text-xs font-semibold text-td-text">
-            Permission required
-          </span>
-          <span className="text-[11px] text-td-muted">
-            Claude wants to perform {denials.length} action{denials.length !== 1 ? 's' : ''}
-          </span>
-        </div>
+      <div className="max-w-3xl mx-auto mb-2 rounded-lg border border-td-border bg-td-surface overflow-hidden">
+        {/* Title + content */}
+        <div className="px-4 pt-4 pb-3 space-y-3">
+          <div>
+            <h3 className="text-sm text-td-text">
+              Allow Claude to <strong>{verb}</strong> {fileName}?
+            </h3>
+            {firstChange && firstChange.action !== 'execute' && (
+              <p className="text-[11px] font-mono text-td-muted mt-1 truncate">
+                {firstChange.filePath}
+              </p>
+            )}
+          </div>
 
-        {/* Tool list */}
-        <div className="px-4 py-2.5 space-y-1.5">
-          {changes.map((change) => {
-            const hasDiff = (change.action === 'edit' && change.oldString != null) ||
-              (change.action === 'write' && change.newContent != null) ||
-              (change.action === 'execute' && change.command)
+          {/* Inline diff/preview */}
+          {changes.map((change) => (
+            <DiffPreview key={change.tool.tool_use_id} change={change} />
+          ))}
 
-            return (
-              <div
-                key={change.tool.tool_use_id}
-                className="flex items-center gap-2.5 py-1.5 px-2.5 rounded-lg bg-td-bg/50 group"
-              >
-                <div className={cn(
-                  'h-6 w-6 rounded-md flex items-center justify-center shrink-0',
-                  change.action === 'write' ? 'bg-emerald-500/15' :
-                  change.action === 'edit' ? 'bg-amber-500/15' :
-                  change.action === 'execute' ? 'bg-blue-500/15' :
-                  'bg-td-border/50'
-                )}>
-                  {change.action === 'write' && <FilePlus className="h-3 w-3 text-emerald-400" />}
-                  {change.action === 'edit' && <FileEdit className="h-3 w-3 text-amber-400" />}
-                  {change.action === 'execute' && <Terminal className="h-3 w-3 text-blue-400" />}
-                  {change.action === 'other' && <FileCode className="h-3 w-3 text-td-muted" />}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-medium text-td-text-secondary">
-                      {actionLabels[change.action]}
-                    </span>
-                    <span className="text-[10px] text-td-muted">{change.tool.tool_name}</span>
-                  </div>
-                  <div className="text-[11px] font-mono text-td-text truncate">
-                    {change.action === 'execute' && change.command
-                      ? `$ ${change.command.slice(0, 60)}`
-                      : change.filePath.split('/').slice(-2).join('/')}
-                  </div>
-                </div>
-
-                {hasDiff && (
-                  <button
-                    type="button"
-                    onClick={() => onViewDiff?.({
-                      filePath: change.filePath,
-                      action: change.action,
-                      oldString: change.oldString,
-                      newString: change.newString,
-                      newContent: change.newContent,
-                      command: change.command,
-                    })}
-                    className="text-[10px] text-td-muted hover:text-td-text flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-                  >
-                    <Eye className="h-3 w-3" />
-                    View
-                  </button>
-                )}
-              </div>
-            )
-          })}
+          {changes.length > 1 && (
+            <p className="text-[11px] text-td-muted">
+              + {changes.length - 1} more action{changes.length > 2 ? 's' : ''}
+            </p>
+          )}
         </div>
 
         {/* Actions */}
-        <div className="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-td-border/50 bg-td-bg/30">
+        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-td-border/50">
           <button
             onClick={() => { setDecided(true); onReject() }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-td-muted hover:text-red-400 hover:bg-red-500/10 transition-colors"
+            className="flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium text-td-muted hover:text-td-text hover:bg-td-hover transition-colors"
           >
-            <X className="h-3 w-3" />
             Deny
+            <Kbd>Esc</Kbd>
           </button>
           <button
             onClick={() => { setDecided(true); onApproveAll() }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-td-muted hover:text-amber-400 hover:bg-amber-500/10 border border-td-border transition-colors"
+            className="flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium text-td-text-secondary hover:text-td-text border border-td-border hover:bg-td-hover transition-colors"
           >
-            <ShieldCheck className="h-3 w-3" />
-            Always allow
+            Always allow for session
+            <span className="flex items-center gap-0.5">
+              <Kbd>{isMac ? '⌘' : 'Ctrl'}</Kbd>
+              <Kbd>↵</Kbd>
+            </span>
           </button>
           <button
             onClick={() => { setDecided(true); onApprove([...denials]) }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-white bg-emerald-600 hover:bg-emerald-500 transition-colors"
+            className="flex items-center gap-1.5 h-8 px-3.5 rounded-md text-xs font-medium text-td-text bg-td-hover/80 border border-td-border hover:bg-td-muted/30 transition-colors"
           >
-            <Check className="h-3 w-3" />
-            Allow
+            Allow once
+            <Kbd>↵</Kbd>
           </button>
         </div>
       </div>
