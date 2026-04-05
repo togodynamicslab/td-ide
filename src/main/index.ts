@@ -704,6 +704,19 @@ ipcMain.handle('process:kill-orphan', (_event, { pid }: { pid: number }) => {
   }
 })
 
+ipcMain.handle('agent:restart', async () => {
+  try {
+    if (acpManager) {
+      await acpManager.shutdown()
+      await acpManager.initialize()
+    }
+    return { success: true }
+  } catch (err) {
+    console.error('[td-ide] Agent restart error:', (err as Error).message)
+    return { success: false, error: (err as Error).message }
+  }
+})
+
 ipcMain.handle('process:get-memory-usage', () => {
   const mainMemory = process.memoryUsage()
   const agentInfo = acpManager?.getProcessInfo() || { pid: null, sessions: 0 }

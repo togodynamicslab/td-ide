@@ -18,6 +18,7 @@ interface MemoryIndicatorProps {
   conversationTitles?: Map<string, string>
   onNavigateToConversation?: (conversationId: string) => void
   onKillSession?: (conversationId: string) => void
+  onKillAgent?: () => void
 }
 
 function formatMB(bytes: number): string {
@@ -25,7 +26,7 @@ function formatMB(bytes: number): string {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`
 }
 
-function MemoryIndicator({ conversationTitles, onNavigateToConversation, onKillSession }: MemoryIndicatorProps): JSX.Element | null {
+function MemoryIndicator({ conversationTitles, onNavigateToConversation, onKillSession, onKillAgent }: MemoryIndicatorProps): JSX.Element | null {
   const [memory, setMemory] = useState<MemoryInfo | null>(null)
 
   useEffect(() => {
@@ -66,9 +67,20 @@ function MemoryIndicator({ conversationTitles, onNavigateToConversation, onKillS
             <span className="text-td-text">{formatMB(memory.main.heapUsed)} / {formatMB(memory.main.heapTotal)}</span>
           </div>
           {memory.agent.pid && (
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center group/agent">
               <span className="text-td-muted">Agent (PID {memory.agent.pid})</span>
-              <span className="text-td-text">{formatMB(memory.agent.rss)}</span>
+              <div className="flex items-center gap-1">
+                <span className="text-td-text">{formatMB(memory.agent.rss)}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-5 w-5 opacity-0 group-hover/agent:opacity-100 transition-opacity text-td-muted hover:text-red-400"
+                  onClick={() => onKillAgent?.()}
+                  title="Kill agent process"
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
             </div>
           )}
         </div>

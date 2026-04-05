@@ -101,6 +101,7 @@ interface ClaudeAPI {
   }>
   getInterruptedProcesses: () => Promise<{ conversationId: string; pid: number; startedAt: number; alive: boolean }[]>
   killOrphanProcess: (pid: number) => Promise<{ success: boolean }>
+  restartAgent: () => Promise<{ success: boolean; error?: string }>
 
   // Stream listeners
   onStream: (callback: (conversationId: string, data: unknown) => void) => () => void

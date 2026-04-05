@@ -244,6 +244,9 @@ const api = {
   killOrphanProcess: (pid: number): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('process:kill-orphan', { pid })
   },
+  restartAgent: (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('agent:restart')
+  },
 
   // Stream listeners
   onStream: (callback: (conversationId: string, data: unknown) => void) => {

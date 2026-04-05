@@ -87,6 +87,7 @@ interface AppSidebarProps {
   onOpenProjectSettings?: (projectId: string) => void
   onReorderProjects?: (orderedIds: string[]) => void
   onKillSession?: (conversationId: string) => void
+  onKillAgent?: () => void
   recentlyRetitled?: Set<string>
 }
 
@@ -142,6 +143,7 @@ function AppSidebar({
   onOpenProjectSettings,
   onReorderProjects,
   onKillSession,
+  onKillAgent,
   recentlyRetitled
 }: AppSidebarProps): JSX.Element {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
@@ -625,6 +627,7 @@ function AppSidebar({
               }
             }}
             onKillSession={onKillSession}
+            onKillAgent={onKillAgent}
           />
           <SidebarMenu>
             <SidebarMenuItem>

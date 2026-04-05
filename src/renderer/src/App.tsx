@@ -1433,6 +1433,7 @@ function App(): JSX.Element {
         onDeleteProject={handleDeleteProject}
         onReorderProjects={handleReorderProjects}
         onKillSession={(convId) => window.api.cancelMessage(convId)}
+        onKillAgent={() => window.api.restartAgent()}
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
         onArchiveConversation={handleArchiveConversation}
