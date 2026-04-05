@@ -1,0 +1,54 @@
+appId: com.togodynamics.td-ide
+productName: TD IDE
+copyright: Copyright (c) 2026 Togo Dynamics
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**/*
+
+npmRebuild: true
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  identity: null
+  hardenedRuntime: false
+
+dmg:
+  writeUpdateInfo: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  sign: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+linux:
+  category: Development
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+
+publish:
+  provider: github
+  owner: togodynamicslab
+  repo: td-ide
+  releaseType: prerelease
