@@ -10,13 +10,14 @@ import type { Conversation } from '../App'
 
 const TAB_BASE = 'group relative flex items-center gap-2 h-[35px] w-[200px] px-3 text-xs shrink-0 select-none border-r border-td-border/40'
 
-type TabStatus = 'loading' | 'done' | 'interrupted' | 'idle'
+type TabStatus = 'loading' | 'done' | 'interrupted' | 'permission' | 'idle'
 
 function AnimatedTabAccent({ status }: { status: TabStatus }) {
   const colorClass = {
     loading: 'bg-td-accent',
     done: 'bg-emerald-400',
     interrupted: 'bg-amber-400',
+    permission: 'bg-orange-400',
     idle: 'bg-td-muted/40'
   }[status]
 
@@ -32,8 +33,7 @@ interface ConversationTabsProps {
   activeConversationId: string | null
   loadingConversations: Set<string>
   interruptedConversations?: Set<string>
-  recentlyRetitled?: Set<string>
-  queuedCounts: Map<string, number>
+  pendingPermissionConvId?: string | null
   onSelectConversation: (id: string) => void
   onArchiveConversation: (id: string) => void
   onRenameConversation: (id: string, title: string) => void
@@ -45,8 +45,7 @@ function ConversationTabs({
   activeConversationId,
   loadingConversations,
   interruptedConversations,
-  recentlyRetitled,
-  queuedCounts,
+  pendingPermissionConvId,
   onSelectConversation,
   onArchiveConversation,
   onRenameConversation,
@@ -92,9 +91,7 @@ function ConversationTabs({
         const isLoading = loadingConversations.has(conv.id)
         const isInterrupted = interruptedConversations?.has(conv.id)
         const isDone = recentlyFinished.has(conv.id)
-        const queued = queuedCounts.get(conv.id) ?? 0
-        const isRetitled = recentlyRetitled?.has(conv.id)
-        const needsAttention = (isLoading && queued > 0) || (isDone && !isActive) || (isInterrupted && !isActive) || isRetitled
+        const needsPermission = pendingPermissionConvId === conv.id
 
         return (
           <ContextMenu key={conv.id}>
@@ -115,7 +112,7 @@ function ConversationTabs({
                     : 'text-td-text-tertiary hover:bg-td-hover/50 hover:text-td-text-secondary'
                 }`}
               >
-                <AnimatedTabAccent status={isLoading ? 'loading' : isDone ? 'done' : isInterrupted ? 'interrupted' : 'idle'} />
+                <AnimatedTabAccent status={needsPermission ? 'permission' : isLoading ? 'loading' : isDone ? 'done' : isInterrupted ? 'interrupted' : 'idle'} />
                 {isLoading ? (
                   <Loader2 className="h-3.5 w-3.5 shrink-0 text-td-accent animate-spin" />
                 ) : isDone ? (
@@ -128,19 +125,6 @@ function ConversationTabs({
                   <MessageSquare className="h-3.5 w-3.5 shrink-0 text-td-muted" />
                 )}
                 <span className="truncate flex-1 min-w-0">{conv.title}</span>
-                {needsAttention && (
-                  <span className={`shrink-0 h-4 min-w-[16px] px-1 rounded-full text-[9px] font-semibold inline-flex items-center justify-center ${
-                    isLoading && queued > 0
-                      ? 'bg-td-accent/20 text-td-accent'
-                      : isDone
-                        ? 'bg-emerald-500/20 text-emerald-400'
-                        : isInterrupted
-                          ? 'bg-amber-500/20 text-amber-400'
-                          : 'bg-[#D97757]/20 text-[#D97757]'
-                  }`}>
-                    {isLoading && queued > 0 ? `+${queued}` : isDone ? '!' : isInterrupted ? '!' : '*'}
-                  </span>
-                )}
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); onArchiveConversation(conv.id) }}
