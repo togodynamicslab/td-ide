@@ -79,6 +79,10 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.commit_sha }}
 
+      - name: Setup Python setuptools
+        run: pip install setuptools
+        shell: bash
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
