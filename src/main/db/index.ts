@@ -78,6 +78,13 @@ export function initDatabase(): void {
     // Column already exists
   }
 
+  // Migration: add sort_order column to projects
+  try {
+    sqlite.exec(`ALTER TABLE projects ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
+  } catch {
+    // Column already exists
+  }
+
   // Session recovery tables
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS app_state (
@@ -99,7 +106,13 @@ export function closeDatabase(): void {
 // --- Projects ---
 
 export function getAllProjects() {
-  return db.select().from(schema.projects).all()
+  return db.select().from(schema.projects).orderBy(asc(schema.projects.sortOrder)).all()
+}
+
+export function updateProjectOrder(orderedIds: string[]) {
+  for (let i = 0; i < orderedIds.length; i++) {
+    db.update(schema.projects).set({ sortOrder: i }).where(eq(schema.projects.id, orderedIds[i])).run()
+  }
 }
 
 export function insertProject(id: string, name: string, path: string) {
@@ -148,7 +161,7 @@ export function isConversationTitleEdited(id: string): boolean {
   return !!row?.titleEdited
 }
 
-export function updateConversationSessionId(id: string, sessionId: string) {
+export function updateConversationSessionId(id: string, sessionId: string | null) {
   return db
     .update(schema.conversations)
     .set({ sessionId })
@@ -309,3 +322,4 @@ export function getAllActiveProcesses() {
 export function clearAllActiveProcesses() {
   return db.delete(schema.activeProcesses).run()
 }
+

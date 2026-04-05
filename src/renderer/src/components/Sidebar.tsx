@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   FolderOpen,
   Settings,
@@ -18,7 +18,8 @@ import {
   GitFork,
   AlertTriangle,
   Wrench,
-  PanelLeftClose
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react'
 import WindowControls from './WindowControls'
 import MemoryIndicator from './StatusBar'
@@ -57,6 +58,10 @@ import {
   AlertDialogCancel
 } from './ui/alert-dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { cn } from '@/lib/utils'
 import { useTheme } from '@/lib/theme'
 import type { Project } from '../App'
 
@@ -80,6 +85,8 @@ interface AppSidebarProps {
   onNewChatForProject: (projectId: string) => void
   onOpenSettings: () => void
   onOpenProjectSettings?: (projectId: string) => void
+  onReorderProjects?: (orderedIds: string[]) => void
+  onKillSession?: (conversationId: string) => void
   recentlyRetitled?: Set<string>
 }
 
@@ -87,6 +94,30 @@ interface DeleteTarget {
   type: 'project' | 'conversation' | 'all-archived'
   id: string
   name: string
+}
+
+function SortableProjectItem({ id, children }: { id: string; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const style: React.CSSProperties = {
+    transform: transform ? `translate3d(0, ${transform.y}px, 0)` : undefined,
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    position: 'relative',
+    zIndex: isDragging ? 10 : undefined
+  }
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      data-slot="sidebar-menu-item"
+      data-sidebar="menu-item"
+      className="group/menu-item relative"
+      {...attributes}
+      {...listeners}
+    >
+      {children}
+    </li>
+  )
 }
 
 function AppSidebar({
@@ -109,6 +140,8 @@ function AppSidebar({
   onNewChatForProject,
   onOpenSettings,
   onOpenProjectSettings,
+  onReorderProjects,
+  onKillSession,
   recentlyRetitled
 }: AppSidebarProps): JSX.Element {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
@@ -123,6 +156,20 @@ function AppSidebar({
   const editInputRef = useRef<HTMLInputElement>(null)
   const { theme, toggleTheme } = useTheme()
   const { state: sidebarState, toggleSidebar } = useSidebar()
+
+  // Drag-and-drop for project reordering
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 300, tolerance: 5 } }))
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = projects.findIndex(p => p.id === active.id)
+    const newIndex = projects.findIndex(p => p.id === over.id)
+    if (oldIndex === -1 || newIndex === -1) return
+    const reordered = [...projects.map(p => p.id)]
+    reordered.splice(oldIndex, 1)
+    reordered.splice(newIndex, 0, active.id as string)
+    onReorderProjects?.(reordered)
+  }, [projects, onReorderProjects])
 
   // Track conversations that just finished loading → show checkmark until clicked
   useEffect(() => {
@@ -222,39 +269,71 @@ function AppSidebar({
   return (
     <>
       <Sidebar collapsible="icon">
-        {/* Header */}
-        <SidebarHeader className="flex-row items-center justify-between px-3 py-2 titlebar-drag gap-2">
-          <WindowControls />
-          <div className="flex items-center gap-1.5 flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-bold text-td-text tracking-tight">td-ide</span>
-            <span className="text-[9px] px-1 py-px rounded bg-td-muted/10 text-td-muted uppercase tracking-widest font-medium">
-              Alpha
-            </span>
+        {/* Header — shared container with fixed height */}
+        <div className="h-10 flex items-center px-3 titlebar-drag overflow-hidden shrink-0">
+          {/* Expanded header content */}
+          <div className={cn(
+            'flex items-center justify-between w-full gap-2 transition-all duration-200 ease-in-out',
+            sidebarState === 'collapsed'
+              ? 'opacity-0 scale-95 pointer-events-none absolute'
+              : 'opacity-100 scale-100 delay-100'
+          )}>
+            <WindowControls />
+            <div className={cn(
+              'flex items-center gap-1.5 flex-1 min-w-0 transition-opacity duration-150',
+              sidebarState === 'collapsed' ? 'opacity-0' : 'opacity-100 delay-200'
+            )}>
+              <span className="text-sm font-bold text-td-text tracking-tight whitespace-nowrap">td-ide</span>
+              <span className="text-[9px] px-1 py-px rounded bg-td-muted/10 text-td-muted uppercase tracking-widest font-medium whitespace-nowrap">
+                Alpha
+              </span>
+            </div>
+            <div className="flex items-center gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" onClick={onNewChat} className="titlebar-no-drag h-6 w-6">
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">New chat</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" onClick={toggleSidebar} className="titlebar-no-drag h-6 w-6">
+                    <PanelLeftClose className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Collapse sidebar (Cmd+B)</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
-          <div className="flex items-center gap-0.5">
+          {/* Collapsed header content */}
+          <div className={cn(
+            'flex items-center justify-center w-full transition-all duration-200 ease-in-out',
+            sidebarState === 'collapsed'
+              ? 'opacity-100 scale-100 delay-100'
+              : 'opacity-0 scale-95 pointer-events-none absolute'
+          )}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" onClick={onNewChat} className="titlebar-no-drag h-6 w-6">
-                  <Plus className="h-3.5 w-3.5" />
+                <Button variant="ghost" size="icon" onClick={toggleSidebar} className="h-8 w-8">
+                  <PanelLeftOpen className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="right">New chat</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" onClick={toggleSidebar} className="titlebar-no-drag h-6 w-6">
-                  <PanelLeftClose className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">Collapse sidebar (Cmd+B)</TooltipContent>
+              <TooltipContent side="right">Expand sidebar (Cmd+B)</TooltipContent>
             </Tooltip>
           </div>
-        </SidebarHeader>
+        </div>
 
         <SidebarSeparator />
 
         {/* Collapsed: quick actions */}
-        <div className="hidden group-data-[collapsible=icon]:flex flex-col items-center gap-0.5 py-2">
+        <div className={cn(
+          'flex flex-col items-center gap-0.5 py-2 transition-all duration-200 ease-in-out overflow-hidden',
+          sidebarState === 'collapsed'
+            ? 'max-h-24 opacity-100 delay-100'
+            : 'max-h-0 opacity-0 py-0 pointer-events-none'
+        )}>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" onClick={onNewChat} className="h-8 w-8">
@@ -274,7 +353,10 @@ function AppSidebar({
         </div>
 
         {/* Projects */}
-        <SidebarContent className="group-data-[collapsible=icon]:hidden">
+        <SidebarContent className={cn(
+          'transition-opacity duration-200 ease-in-out',
+          sidebarState === 'collapsed' ? 'opacity-0 pointer-events-none' : 'opacity-100 delay-100'
+        )}>
           <SidebarGroup>
             <SidebarGroupLabel>Projects</SidebarGroupLabel>
             <SidebarGroupAction onClick={onAddProject} title="Add project">
@@ -290,12 +372,18 @@ function AppSidebar({
                   </Button>
                 </div>
               ) : (
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleDragEnd}
+                >
+                <SortableContext items={projects.map(p => p.id)} strategy={verticalListSortingStrategy}>
                 <SidebarMenu>
                   {projects.map((project) => {
                     const projectHasLoading = project.conversations.some((c) => loadingConversations.has(c.id))
                     const projectHasFinished = !projectHasLoading && project.conversations.some((c) => recentlyFinished.has(c.id))
                     return (
-                    <SidebarMenuItem key={project.id}>
+                    <SortableProjectItem key={project.id} id={project.id}>
                       <ContextMenu>
                         <ContextMenuTrigger asChild>
                           <SidebarMenuButton
@@ -408,19 +496,19 @@ function AppSidebar({
                                     <>
                                       <span className="truncate flex-1">{conv.title}</span>
                                       {loadingConversations.has(conv.id) ? (
-                                        <span className="text-[10px] text-td-accent shrink-0">
+                                        <span className="text-[10px] text-td-accent shrink-0 w-12 text-right">
                                           {(queuedCounts.get(conv.id) ?? 0) > 0
                                             ? `+${queuedCounts.get(conv.id)} queued`
                                             : 'Working...'}
                                         </span>
                                       ) : recentlyRetitled?.has(conv.id) ? (
-                                        <span className="text-[10px] text-[#D97757] shrink-0 animate-pulse">Title updated</span>
+                                        <span className="text-[10px] text-[#D97757] shrink-0 w-12 text-right animate-pulse">Title updated</span>
                                       ) : recentlyFinished.has(conv.id) ? (
-                                        <span className="text-[10px] text-emerald-400 shrink-0">Done</span>
+                                        <span className="text-[10px] text-emerald-400 shrink-0 w-12 text-right">Done</span>
                                       ) : interruptedConversations?.has(conv.id) ? (
-                                        <span className="text-[10px] text-amber-400 shrink-0">Interrupted</span>
+                                        <span className="text-[10px] text-amber-400 shrink-0 w-12 text-right">Interrupted</span>
                                       ) : (
-                                        <span className="text-[10px] text-td-muted shrink-0">
+                                        <span className="text-[10px] text-td-muted shrink-0 w-12 text-right">
                                           {formatTime(conv.createdAt)}
                                         </span>
                                       )}
@@ -508,10 +596,12 @@ function AppSidebar({
                           </SidebarMenuSub>
                         )
                       })()}
-                    </SidebarMenuItem>
+                    </SortableProjectItem>
                     )
                   })}
                 </SidebarMenu>
+                </SortableContext>
+                </DndContext>
               )}
             </SidebarGroupContent>
           </SidebarGroup>
@@ -521,7 +611,21 @@ function AppSidebar({
 
         {/* Footer */}
         <SidebarFooter className="pb-7">
-          <MemoryIndicator />
+          <MemoryIndicator
+            conversationTitles={useMemo(() => {
+              const map = new Map<string, string>()
+              projects.forEach(p => p.conversations.forEach(c => map.set(c.id, c.title)))
+              return map
+            }, [projects])}
+            onNavigateToConversation={(convId) => {
+              const project = projects.find(p => p.conversations.some(c => c.id === convId))
+              if (project) {
+                onSelectProject(project.id)
+                onSelectConversation(convId)
+              }
+            }}
+            onKillSession={onKillSession}
+          />
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton onClick={toggleTheme} tooltip={theme === 'dark' ? 'Light mode' : 'Dark mode'}>

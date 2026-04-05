@@ -453,7 +453,7 @@ function SidebarMenuSub({ className, ...props }: React.ComponentProps<'ul'>) {
       data-slot="sidebar-menu-sub"
       data-sidebar="menu-sub"
       className={cn(
-        'ml-2 mr-0 flex min-w-0 flex-col gap-0.5 pl-2 pr-0 py-0.5',
+        'ml-0 mr-0 flex min-w-0 flex-col gap-0.5 pl-0 pr-0 py-0.5',
         'group-data-[collapsible=icon]:hidden',
         className
       )}
@@ -493,7 +493,7 @@ function SidebarMenuSubButton({
       data-size={size}
       data-active={isActive}
       className={cn(
-        'flex min-w-0 -translate-x-px items-center gap-2 overflow-hidden rounded-md px-2 text-td-text-tertiary outline-none hover:bg-td-hover hover:text-td-text focus-visible:ring-1 focus-visible:ring-td-accent disabled:pointer-events-none disabled:opacity-50 [&>span:last-child]:truncate [&>svg]:shrink-0',
+        'flex min-w-0 -translate-x-px items-center gap-1.5 overflow-hidden rounded-md px-1.5 text-td-text-tertiary outline-none hover:bg-td-hover hover:text-td-text focus-visible:ring-1 focus-visible:ring-td-accent disabled:pointer-events-none disabled:opacity-50 [&>span:last-child]:truncate [&>svg]:shrink-0',
         'data-[active=true]:bg-td-hover data-[active=true]:text-td-text',
         size === 'sm' && 'h-6 text-[11px] [&>svg]:h-3 [&>svg]:w-3',
         size === 'md' && 'h-7 text-sm [&>svg]:h-4 [&>svg]:w-4',
