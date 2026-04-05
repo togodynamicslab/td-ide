@@ -42,6 +42,9 @@ const api = {
   gitDiffStats: (cwd: string): Promise<{ additions: number; deletions: number }> => {
     return ipcRenderer.invoke('git:diff-stats', { cwd })
   },
+  gitDiffFiles: (cwd: string): Promise<{ file: string; additions: number; deletions: number }[]> => {
+    return ipcRenderer.invoke('git:diff-files', { cwd })
+  },
   gitInit: (cwd: string): Promise<{ success: boolean; branch?: string; error?: string }> => {
     return ipcRenderer.invoke('git:init', { cwd })
   },
@@ -133,6 +136,9 @@ const api = {
   deleteProject: (id: string): Promise<boolean> => {
     return ipcRenderer.invoke('db:delete-project', { id })
   },
+  reorderProjects: (orderedIds: string[]): Promise<boolean> => {
+    return ipcRenderer.invoke('db:reorder-projects', { orderedIds })
+  },
 
   // DB — Conversations
   getConversations: (projectId: string): Promise<unknown[]> => {
@@ -190,6 +196,9 @@ const api = {
   // Terminal
   terminalCreate: (id: string, cwd: string, shell?: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('terminal:create', { id, cwd, shell })
+  },
+  terminalCreateWithCommand: (id: string, cwd: string, command: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('terminal:createWithCommand', { id, cwd, command })
   },
   terminalInput: (id: string, data: string): void => {
     ipcRenderer.send('terminal:input', { id, data })

@@ -71,7 +71,8 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -79,12 +80,16 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgb(var(--td-scrollbar));
-  border-radius: 3px;
+  background: rgb(var(--td-scrollbar) / 0.4);
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgb(var(--td-scrollbar-hover));
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Custom title bar drag region */

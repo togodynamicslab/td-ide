@@ -8,7 +8,7 @@ import {
   Terminal, Zap, Info, Check, Timer, RefreshCw,
   Code2, Bug, Keyboard, BookOpen, Archive, GitFork, BarChart3,
   Key, Eye, EyeOff, ChevronDown, CircleCheck, Cpu, Search, DollarSign,
-  AlertTriangle, GitBranch, ArrowLeft, ArrowUp
+  AlertTriangle, GitBranch, ArrowLeft, ArrowUp, Trash2
 } from 'lucide-react'
 import { Button } from './ui/button'
 import {
@@ -20,6 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from './ui/t
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs'
 import { cn } from '@/lib/utils'
+import ShellSessionBar from './ShellSessionBar'
 import type { ModelId, EffortLevel, PermissionMode, ImageAttachment, ApiMode, ApiProvider } from '../App'
 
 interface InputBarProps {
@@ -44,8 +45,6 @@ interface InputBarProps {
   disabledTools: Set<string>
   onToggleTool: (tool: string) => void
   onArchiveConversation: () => void
-  useWorktree: boolean
-  onUseWorktreeChange: (value: boolean) => void
   onShowUsage: () => void
   apiMode: ApiMode
   onApiModeChange: (mode: ApiMode) => void
@@ -62,6 +61,14 @@ interface InputBarProps {
   projectPath: string | null
   onBranchChange: (branch: string) => void
   worktreePath: string | null
+  messageHistory: string[]
+  onCreateWorktree: (branchName: string) => Promise<{ success: boolean; error?: string }>
+  onSelectWorktree: (path: string | null) => void
+  onRemoveWorktree: (path: string) => Promise<{ success: boolean; error?: string }>
+  terminalOpen: boolean
+  onToggleTerminal: () => void
+  shellSession: { id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null
+  onShellSession: (session: { id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null) => void
 }
 
 // --- Slash command definitions ---
@@ -623,27 +630,285 @@ function AnimatedBorder({ permissionMode, isDragging, children }: {
   )
 }
 
+function DiffFilesPopover({ projectPath, children }: { projectPath: string | null; children: React.ReactNode }) {
+  const [files, setFiles] = useState<{ file: string; additions: number; deletions: number }[]>([])
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open || !projectPath) return
+    window.api.gitDiffFiles(projectPath).then(setFiles)
+  }, [open, projectPath])
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        {children}
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="w-[360px] p-0">
+        <div className="px-3 py-2 border-b border-td-border">
+          <span className="text-xs font-medium text-td-text">Changed files</span>
+          <span className="text-[10px] text-td-muted ml-2">{files.length} file{files.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div className="max-h-[280px] overflow-y-auto">
+          {files.length === 0 ? (
+            <div className="px-3 py-4 text-xs text-td-muted text-center">No changes</div>
+          ) : (
+            files.map((f) => (
+              <div key={f.file} className="flex items-center gap-2 px-3 py-1.5 hover:bg-td-hover/50 text-xs">
+                <span className="truncate flex-1 min-w-0 text-td-text-secondary font-mono">{f.file}</span>
+                <span className="shrink-0 font-mono tabular-nums text-[10px]">
+                  {f.additions > 0 && <span className="text-emerald-400">+{f.additions}</span>}
+                  {f.additions > 0 && f.deletions > 0 && ' '}
+                  {f.deletions > 0 && <span className="text-red-400">-{f.deletions}</span>}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+interface Worktree {
+  path: string
+  branch: string
+  bare: boolean
+  current: boolean
+  diffStats?: { additions: number; deletions: number }
+}
+
+function WorktreeManager({
+  projectPath, worktreePath, conversationId,
+  onCreate, onSelect, onRemove, children
+}: {
+  projectPath: string | null
+  worktreePath: string | null
+  conversationId: string | null
+  onCreate: (branchName: string) => Promise<{ success: boolean; error?: string }>
+  onSelect: (path: string | null) => void
+  onRemove: (path: string) => Promise<{ success: boolean; error?: string }>
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const [worktrees, setWorktrees] = useState<Worktree[]>([])
+  const [loading, setLoading] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [newBranch, setNewBranch] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const refresh = useCallback(async () => {
+    if (!projectPath) return
+    setLoading(true)
+    const result = await window.api.gitWorktreeList(projectPath)
+    if (result.success) {
+      // Fetch diff stats for each non-bare worktree
+      const withStats = await Promise.all(
+        result.worktrees.map(async (wt) => {
+          if (wt.bare || wt.current) return { ...wt }
+          try {
+            const stats = await window.api.gitDiffStats(wt.path)
+            return { ...wt, diffStats: stats }
+          } catch {
+            return { ...wt }
+          }
+        })
+      )
+      setWorktrees(withStats)
+    }
+    setLoading(false)
+  }, [projectPath])
+
+  useEffect(() => {
+    if (open) {
+      refresh()
+      setError(null)
+      setCreating(false)
+      setNewBranch('')
+    }
+  }, [open, refresh])
+
+  const handleCreate = async () => {
+    const branch = newBranch.trim()
+    if (!branch) return
+    setError(null)
+    const result = await onCreate(branch)
+    if (result.success) {
+      setCreating(false)
+      setNewBranch('')
+      refresh()
+    } else {
+      setError(result.error || 'Failed to create worktree')
+    }
+  }
+
+  const handleRemove = async (path: string) => {
+    setError(null)
+    const result = await onRemove(path)
+    if (result.success) {
+      refresh()
+    } else {
+      setError(result.error || 'Failed to remove worktree')
+    }
+  }
+
+  // Filter: show non-bare, non-current worktrees (the ones td-ide manages)
+  const managedWorktrees = worktrees.filter((wt) => !wt.bare && !wt.current)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        {children}
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="w-[340px] p-0">
+        <div className="px-3 py-2 border-b border-td-border flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <GitFork className="h-3.5 w-3.5 text-purple-400" />
+            <span className="text-xs font-medium text-td-text">Worktrees</span>
+            <span className="text-[10px] text-td-muted">{managedWorktrees.length}</span>
+          </div>
+          {!creating && (
+            <button
+              type="button"
+              className="text-[10px] text-td-accent hover:text-td-text transition-colors flex items-center gap-1"
+              onClick={() => { setCreating(true); setTimeout(() => inputRef.current?.focus(), 50) }}
+            >
+              <Plus className="h-3 w-3" /> New
+            </button>
+          )}
+        </div>
+
+        {creating && (
+          <div className="px-3 py-2 border-b border-td-border">
+            <div className="flex items-center gap-2">
+              <input
+                ref={inputRef}
+                type="text"
+                value={newBranch}
+                onChange={(e) => setNewBranch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setCreating(false) }}
+                placeholder="Branch name..."
+                className="flex-1 bg-td-bg rounded px-2 py-1 text-xs text-td-text border border-td-border outline-none focus:border-td-accent"
+              />
+              <button type="button" onClick={handleCreate} className="text-xs text-td-accent hover:text-td-text">
+                <Check className="h-3.5 w-3.5" />
+              </button>
+              <button type="button" onClick={() => setCreating(false)} className="text-xs text-td-muted hover:text-td-text">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="px-3 py-1.5 text-[10px] text-red-400 bg-red-500/5 border-b border-td-border">
+            {error}
+          </div>
+        )}
+
+        <div className="max-h-[240px] overflow-y-auto">
+          {loading ? (
+            <div className="px-3 py-4 text-xs text-td-muted text-center flex items-center justify-center gap-2">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading...
+            </div>
+          ) : managedWorktrees.length === 0 ? (
+            <div className="px-3 py-4 text-xs text-td-muted text-center">
+              No worktrees. Create one to isolate changes.
+            </div>
+          ) : (
+            managedWorktrees.map((wt) => {
+              const isActive = worktreePath === wt.path
+              const hasChanges = wt.diffStats && (wt.diffStats.additions > 0 || wt.diffStats.deletions > 0)
+              return (
+                <div
+                  key={wt.path}
+                  className={cn(
+                    'flex items-center gap-2 px-3 py-2 text-xs group transition-colors',
+                    isActive ? 'bg-purple-500/10' : 'hover:bg-td-hover/50'
+                  )}
+                >
+                  <button
+                    type="button"
+                    className="flex-1 min-w-0 text-left flex items-center gap-2"
+                    onClick={() => {
+                      onSelect(isActive ? null : wt.path)
+                      setOpen(false)
+                    }}
+                  >
+                    <GitBranch className={cn('h-3 w-3 shrink-0', isActive ? 'text-purple-400' : 'text-td-muted')} />
+                    <span className={cn('truncate font-mono', isActive ? 'text-purple-400' : 'text-td-text-secondary')}>
+                      {wt.branch}
+                    </span>
+                    {isActive && <span className="text-[9px] text-purple-400/70 uppercase tracking-wider shrink-0">active</span>}
+                  </button>
+                  {hasChanges && (
+                    <span className="shrink-0 font-mono tabular-nums text-[10px]">
+                      <span className="text-emerald-400">+{wt.diffStats!.additions}</span>
+                      {' '}
+                      <span className="text-red-400">-{wt.diffStats!.deletions}</span>
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className={cn(
+                      'shrink-0 text-td-muted hover:text-red-400 transition-colors',
+                      isActive ? 'opacity-50 cursor-not-allowed' : 'opacity-0 group-hover:opacity-100'
+                    )}
+                    onClick={(e) => { e.stopPropagation(); if (!isActive) handleRemove(wt.path) }}
+                    disabled={isActive}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              )
+            })
+          )}
+        </div>
+
+        {worktreePath && conversationId && (
+          <div className="px-3 py-1.5 border-t border-td-border">
+            <button
+              type="button"
+              className="text-[10px] text-td-muted hover:text-td-text transition-colors"
+              onClick={() => { onSelect(null); setOpen(false) }}
+            >
+              Detach from worktree
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function InputBar({
   conversationId, onSend, onCancel, onNewChat, onClearConversation,
   onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile,
   isLoading, queueLength, queuedMessages, selectedModel, onModelChange,
   effortLevel, onEffortChange, permissionMode, onPermissionModeChange,
   disabledTools, onToggleTool, onArchiveConversation,
-  useWorktree, onUseWorktreeChange, onShowUsage,
+  onShowUsage,
   apiMode, onApiModeChange, apiProvider, onApiProviderChange,
   apiKey, onApiKeyChange, customModel, onCustomModelChange,
   contextTokens, gitBranch, gitDiffStats, onCommitChanges,
-  projectPath, onBranchChange, worktreePath
+  projectPath, onBranchChange, worktreePath, messageHistory,
+  onCreateWorktree, onSelectWorktree, onRemoveWorktree,
+  terminalOpen, onToggleTerminal,
+  shellSession, onShellSession
 }: InputBarProps): JSX.Element {
   const [text, setText] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [slashIdx, setSlashIdx] = useState(0)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
+  // shellSession is now lifted to App.tsx via props (shellSession, onShellSession)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const drafts = useRef<Map<string, Draft>>(new Map())
+  const historyIndex = useRef(-1)
+  const historyDraft = useRef('')
   const prevConvId = useRef<string | null>(null)
 
   const status = isLoading ? 'streaming' : 'ready'
@@ -886,11 +1151,18 @@ function InputBar({
     return { cmdName, arg, hasSpace, rest }
   }, [text])
 
-  // Detect shell command mode (! prefix)
+  // Detect shell command mode (! prefix, but not !!)
   const shellMode = useMemo(() => {
     const trimmed = text.trimStart()
-    if (!trimmed.startsWith('!') || trimmed.length <= 1) return null
+    if (!trimmed.startsWith('!') || trimmed.startsWith('!!') || trimmed.length <= 1) return null
     return { command: trimmed.slice(1) }
+  }, [text])
+
+  // Detect terminal session mode (!! prefix)
+  const terminalMode = useMemo(() => {
+    const trimmed = text.trimStart()
+    if (!trimmed.startsWith('!!') || trimmed.length <= 2) return null
+    return { command: trimmed.slice(2) }
   }, [text])
 
   // Build menu items with category grouping
@@ -968,6 +1240,8 @@ function InputBar({
       const saved = drafts.current.get(key)
       setText(saved?.text || '')
       setImages(saved?.images || [])
+      historyIndex.current = -1
+      historyDraft.current = ''
     }
 
     prevConvId.current = conversationId
@@ -998,6 +1272,15 @@ function InputBar({
       if (item) { executeSlash(item); return }
     }
 
+    // !! prefix: spawn interactive PTY in action bar (vs ! which runs inline in chat)
+    if (terminalMode && projectPath) {
+      onShellSession({ id: `shell-${Date.now()}`, command: terminalMode.command, exitCode: null, conversationId: conversationId, scope: 'conversation' })
+      setText('')
+      drafts.current.delete(conversationId || '__new__')
+      if (textareaRef.current) textareaRef.current.style.height = 'auto'
+      return
+    }
+
     if (!text.trim() && images.length === 0) {
       if (isLoading) onCancel()
       return
@@ -1005,6 +1288,8 @@ function InputBar({
     onSend(text, images)
     setText('')
     setImages([])
+    historyIndex.current = -1
+    historyDraft.current = ''
     drafts.current.delete(conversationId || '__new__')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
   }
@@ -1016,6 +1301,44 @@ function InputBar({
       if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((i) => Math.max(i - 1, 0)); return }
       if (e.key === 'Tab') { e.preventDefault(); const item = menuItems[slashIdx]; if (item) executeSlash(item); return }
       if (e.key === 'Escape') { e.preventDefault(); setText(''); return }
+    }
+
+    // History navigation — cursor at start for Up, at end for Down
+    if (e.key === 'ArrowUp' && messageHistory.length > 0) {
+      const ta = textareaRef.current
+      if (ta && ta.selectionStart === 0 && ta.selectionEnd === 0) {
+        e.preventDefault()
+        if (historyIndex.current === -1) {
+          historyDraft.current = text
+        }
+        const nextIdx = Math.min(historyIndex.current + 1, messageHistory.length - 1)
+        if (nextIdx !== historyIndex.current) {
+          historyIndex.current = nextIdx
+          const msg = messageHistory[messageHistory.length - 1 - nextIdx]
+          setText(msg)
+          // Pin cursor to start so the next ArrowUp fires immediately
+          requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = 0 })
+        }
+        return
+      }
+    }
+    if (e.key === 'ArrowDown' && historyIndex.current >= 0) {
+      const ta = textareaRef.current
+      const atEnd = ta && ta.selectionStart === ta.value.length && ta.selectionEnd === ta.value.length
+      if (atEnd) {
+        e.preventDefault()
+        const nextIdx = historyIndex.current - 1
+        if (nextIdx < 0) {
+          historyIndex.current = -1
+          setText(historyDraft.current)
+        } else {
+          historyIndex.current = nextIdx
+          setText(messageHistory[messageHistory.length - 1 - nextIdx])
+        }
+        // Pin cursor to end so the next ArrowDown fires immediately
+        requestAnimationFrame(() => { if (ta) ta.selectionStart = ta.selectionEnd = ta.value.length })
+        return
+      }
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1127,6 +1450,21 @@ function InputBar({
                 </div>
               )}
 
+              {/* Terminal session indicator — !! prefix */}
+              {terminalMode && !showSlashMenu && (
+                <div className="absolute bottom-full left-0 right-0 mb-1 rounded-lg border border-purple-500/30 bg-td-surface shadow-xl z-50 px-3 py-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Terminal className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                    <span className="text-td-text font-medium">Terminal session</span>
+                    <span className="text-td-muted text-xs truncate">{terminalMode.command}</span>
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-3 text-[10px] text-td-muted">
+                    <span><kbd className="px-1 py-0.5 rounded bg-td-bg text-td-text-tertiary">Enter</kbd> launch</span>
+                    <span>Interactive PTY session</span>
+                  </div>
+                </div>
+              )}
+
               {/* Shell command indicator — ! prefix */}
               {shellMode && !showSlashMenu && (
                 <div className="absolute bottom-full left-0 right-0 mb-1 rounded-lg border border-td-border bg-td-surface shadow-xl z-50 px-3 py-2">
@@ -1170,43 +1508,40 @@ function InputBar({
                       projectPath={projectPath}
                       onBranchChange={onBranchChange}
                     />
-                    {/* Worktree: toggle for new chats, indicator for existing */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className={cn(
-                            'flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-md border transition-colors',
-                            (useWorktree && !conversationId) || worktreePath
-                              ? 'border-purple-500/30 bg-purple-500/10 text-purple-400'
-                              : 'border-td-border/60 bg-td-bg/50 text-td-muted hover:text-td-text hover:border-td-muted'
-                          )}
-                          onClick={() => { if (!conversationId) onUseWorktreeChange(!useWorktree) }}
-                        >
-                          <GitFork className="h-3 w-3" />
-                          Worktree
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">
+                    <WorktreeManager
+                      projectPath={projectPath}
+                      worktreePath={worktreePath}
+                      conversationId={conversationId}
+                      onCreate={onCreateWorktree}
+                      onSelect={onSelectWorktree}
+                      onRemove={onRemoveWorktree}
+                    >
+                      <button
+                        type="button"
+                        className={cn(
+                          'flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-md border transition-colors',
+                          worktreePath
+                            ? 'border-purple-500/30 bg-purple-500/10 text-purple-400'
+                            : 'border-td-border/60 bg-td-bg/50 text-td-muted hover:text-td-text hover:border-td-muted'
+                        )}
+                      >
+                        <GitFork className="h-3 w-3" />
                         {worktreePath
-                          ? <p className="font-mono text-[10px]">{worktreePath}</p>
-                          : conversationId
-                            ? 'Not using a worktree'
-                            : useWorktree
-                              ? 'Chat will run in a new git worktree'
-                              : 'Use an isolated git worktree for this chat'
-                        }
-                      </TooltipContent>
-                    </Tooltip>
+                          ? worktreePath.split('/').pop()
+                          : 'Worktree'}
+                      </button>
+                    </WorktreeManager>
                   </div>
                   <div className="flex items-center gap-2">
                     {(gitDiffStats.additions > 0 || gitDiffStats.deletions > 0) && (
                       <>
-                        <span className="text-[11px] px-2 py-0.5 rounded-md border border-td-border/60 bg-td-bg/50 font-mono tabular-nums">
-                          <span className="text-emerald-400">+{gitDiffStats.additions}</span>
-                          {' '}
-                          <span className="text-red-400">-{gitDiffStats.deletions}</span>
-                        </span>
+                        <DiffFilesPopover projectPath={worktreePath || projectPath}>
+                          <span className="text-[11px] px-2 py-0.5 rounded-md border border-td-border/60 bg-td-bg/50 font-mono tabular-nums cursor-pointer hover:border-td-accent/50 transition-colors">
+                            <span className="text-emerald-400">+{gitDiffStats.additions}</span>
+                            {' '}
+                            <span className="text-red-400">-{gitDiffStats.deletions}</span>
+                          </span>
+                        </DiffFilesPopover>
                         <Button
                           type="button"
                           variant="ghost"
@@ -1220,6 +1555,19 @@ function InputBar({
                     )}
                   </div>
                 </div>
+              )}
+
+              {/* Shell session terminal (!! command) */}
+              {shellSession && projectPath && (shellSession.scope === 'global' || shellSession.conversationId === conversationId) && (
+                <ShellSessionBar
+                  sessionId={shellSession.id}
+                  command={shellSession.command}
+                  cwd={projectPath}
+                  scope={shellSession.scope}
+                  onScopeToggle={() => onShellSession({ ...shellSession, scope: shellSession.scope === 'global' ? 'conversation' : 'global' })}
+                  onClose={() => onShellSession(null)}
+                  onExit={(exitCode) => onShellSession(shellSession ? { ...shellSession, exitCode } : null)}
+                />
               )}
 
               {/* Image previews */}
@@ -1419,8 +1767,27 @@ function InputBar({
                   })()}
                 </div>
 
-                {/* Right side: model selector + send button */}
+                {/* Right side: terminal + model selector + send button */}
                 <div className="flex items-center gap-1 shrink-0">
+                  {/* Global terminal toggle */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          'h-7 w-7',
+                          terminalOpen ? 'text-td-accent' : 'text-td-muted'
+                        )}
+                        onClick={onToggleTerminal}
+                      >
+                        <Terminal className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">Terminal (Ctrl+`)</TooltipContent>
+                  </Tooltip>
+
                   {/* Model selector (compact) */}
                   <ModelConfigPopover
                     selectedModel={selectedModel}

@@ -344,6 +344,13 @@ export class AcpClientManager {
     }
   }
 
+  getActiveSessions(): { conversationId: string; sessionId: string }[] {
+    return Array.from(this.conversationToSession.entries()).map(([conversationId, sessionId]) => ({
+      conversationId,
+      sessionId
+    }))
+  }
+
   async shutdown(): Promise<void> {
     // Clear all pending permission timers
     this.pendingPermissions.forEach((pending) => clearTimeout(pending.timeoutId))

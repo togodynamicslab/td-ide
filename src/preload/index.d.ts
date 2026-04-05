@@ -32,6 +32,7 @@ interface ClaudeAPI {
   // Git
   gitStatus: (cwd: string) => Promise<{ isRepo: boolean; branch: string | null }>
   gitDiffStats: (cwd: string) => Promise<{ additions: number; deletions: number }>
+  gitDiffFiles: (cwd: string) => Promise<{ file: string; additions: number; deletions: number }[]>
   gitInit: (cwd: string) => Promise<{ success: boolean; branch?: string; error?: string }>
   gitBranches: (cwd: string) => Promise<{ success: boolean; branches: { name: string; current: boolean }[] }>
   gitCheckout: (cwd: string, branch: string) => Promise<{ success: boolean; error?: string }>
@@ -54,6 +55,7 @@ interface ClaudeAPI {
 
   // Terminal
   terminalCreate: (id: string, cwd: string, shell?: string) => Promise<{ success: boolean; error?: string }>
+  terminalCreateWithCommand: (id: string, cwd: string, command: string) => Promise<{ success: boolean; error?: string }>
   terminalInput: (id: string, data: string) => void
   terminalResize: (id: string, cols: number, rows: number) => Promise<{ success: boolean }>
   terminalClose: (id: string) => Promise<{ success: boolean }>
@@ -65,6 +67,7 @@ interface ClaudeAPI {
   addProject: (id: string, name: string, path: string) => Promise<boolean>
   renameProject: (id: string, name: string) => Promise<boolean>
   deleteProject: (id: string) => Promise<boolean>
+  reorderProjects: (orderedIds: string[]) => Promise<boolean>
 
   // DB — Conversations
   getConversations: (projectId: string) => Promise<unknown[]>
@@ -94,6 +97,7 @@ interface ClaudeAPI {
   getMemoryUsage: () => Promise<{
     main: { rss: number; heapUsed: number; heapTotal: number }
     agent: { pid: number | null; rss: number; sessions: number }
+    activeSessions: { conversationId: string; sessionId: string }[]
   }>
   getInterruptedProcesses: () => Promise<{ conversationId: string; pid: number; startedAt: number; alive: boolean }[]>
   killOrphanProcess: (pid: number) => Promise<{ success: boolean }>

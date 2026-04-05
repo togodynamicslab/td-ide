@@ -13,6 +13,7 @@ import {
   getAllProjects,
   insertProject,
   updateProjectName,
+  updateProjectOrder,
   deleteProject,
   getConversationsByProject,
   insertConversation,
@@ -205,6 +206,11 @@ ipcMain.handle('db:rename-project', (_event, { id, name }: { id: string; name: s
 
 ipcMain.handle('db:delete-project', (_event, { id }: { id: string }) => {
   deleteProject(id)
+  return true
+})
+
+ipcMain.handle('db:reorder-projects', (_event, { orderedIds }: { orderedIds: string[] }) => {
+  updateProjectOrder(orderedIds)
   return true
 })
 
@@ -483,6 +489,24 @@ ipcMain.handle('git:diff-stats', (_event, { cwd }: { cwd: string }) => {
   }
 })
 
+ipcMain.handle('git:diff-files', (_event, { cwd }: { cwd: string }) => {
+  try {
+    const raw = execSync('git diff --numstat HEAD 2>/dev/null || git diff --numstat', { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 })
+    const files: { file: string; additions: number; deletions: number }[] = []
+    for (const line of raw.trim().split('\n')) {
+      if (!line) continue
+      const parts = line.split('\t')
+      if (parts.length < 3) continue
+      const additions = parts[0] === '-' ? 0 : Number(parts[0])
+      const deletions = parts[1] === '-' ? 0 : Number(parts[1])
+      files.push({ file: parts[2], additions, deletions })
+    }
+    return files
+  } catch {
+    return []
+  }
+})
+
 ipcMain.handle('git:branches', (_event, { cwd }: { cwd: string }) => {
   try {
     const raw = execSync('git --no-pager branch --no-color', { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 })
@@ -663,6 +687,8 @@ ipcMain.handle('process:get-interrupted', () => {
       startedAt: proc.startedAt instanceof Date ? proc.startedAt.getTime() : Number(proc.startedAt),
       alive
     })
+    // Clear stale session ID — can never be resumed after app restart
+    updateConversationSessionId(proc.conversationId, null)
   }
   // Clear the table — these are from a previous session
   clearAllActiveProcesses()
@@ -684,18 +710,58 @@ ipcMain.handle('process:get-memory-usage', () => {
   let agentRss = 0
   if (agentInfo.pid) {
     try {
-      // macOS: use ps to get RSS in KB
-      const raw = execSync(`ps -o rss= -p ${agentInfo.pid}`, { encoding: 'utf-8', timeout: 2000 }).trim()
-      agentRss = parseInt(raw, 10) * 1024 // KB to bytes
+      // Get memory for the agent process and all its child processes
+      const pids = execSync(
+        `echo ${agentInfo.pid} && pgrep -P ${agentInfo.pid} 2>/dev/null`,
+        { encoding: 'utf-8', timeout: 2000 }
+      ).trim().split('\n').filter(Boolean)
+      const raw = execSync(
+        `ps -o rss= -p ${pids.join(',')}`,
+        { encoding: 'utf-8', timeout: 2000 }
+      ).trim()
+      agentRss = raw.split('\n').reduce((sum, line) => sum + (parseInt(line.trim(), 10) || 0), 0) * 1024
     } catch { /* process may have exited */ }
   }
+  const activeSessions = acpManager?.getActiveSessions() || []
   return {
     main: { rss: mainMemory.rss, heapUsed: mainMemory.heapUsed, heapTotal: mainMemory.heapTotal },
-    agent: { pid: agentInfo.pid, rss: agentRss, sessions: agentInfo.sessions }
+    agent: { pid: agentInfo.pid, rss: agentRss, sessions: agentInfo.sessions },
+    activeSessions
   }
 })
 
 // --- Claude ACP process management ---
+
+// Format prior conversation messages as a context preamble for session recovery
+function formatConversationHistory(messages: ReturnType<typeof getMessagesByConversation>): string {
+  const MAX_REPLAY = 50
+  const truncated = messages.length > MAX_REPLAY
+  const recent = truncated ? messages.slice(-MAX_REPLAY) : messages
+  const prefix = truncated
+    ? `[Note: showing last ${MAX_REPLAY} of ${messages.length} messages from prior session]\n\n`
+    : ''
+
+  const lines = recent.map((msg) => {
+    const role = msg.role === 'user' ? 'Human' : 'Assistant'
+    let text = msg.content || ''
+
+    if (msg.role === 'assistant' && msg.tools && msg.tools !== '[]') {
+      try {
+        const tools = JSON.parse(msg.tools) as Array<{ name?: string; tool?: string; status?: string }>
+        if (tools.length > 0) {
+          const toolSummary = tools
+            .map((t) => `${t.name || t.tool || 'tool'}${t.status ? ` (${t.status})` : ''}`)
+            .join(', ')
+          text += (text ? '\n' : '') + `[Tools used: ${toolSummary}]`
+        }
+      } catch { /* ignore malformed tools JSON */ }
+    }
+
+    return `${role}: ${text}`
+  })
+
+  return `<conversation_history>\nThe following is the conversation history from a previous session that was interrupted. Continue from where you left off.\n\n${prefix}${lines.join('\n\n')}\n</conversation_history>`
+}
 
 // Map UI permission modes to ACP session mode IDs
 const ACP_MODE_MAP: Record<string, string> = {
@@ -714,6 +780,7 @@ ipcMain.on('claude:send-message', async (_event, { message, conversationId, cwd,
     console.log('[td-ide] Permission mode:', permissionMode, '-> ACP mode:', acpModeId)
 
     let sessionId: string
+    let needsHistoryReplay = false
     if (existingSessionId) {
       try {
         await acpManager.resumeSession(conversationId, existingSessionId, effectiveCwd)
@@ -722,6 +789,7 @@ ipcMain.on('claude:send-message', async (_event, { message, conversationId, cwd,
         // Resume failed — create new session with permission mode baked in
         sessionId = await acpManager.newSession(conversationId, effectiveCwd, acpModeId)
         updateConversationSessionId(conversationId, sessionId)
+        needsHistoryReplay = true
       }
     } else {
       sessionId = await acpManager.newSession(conversationId, effectiveCwd, acpModeId)
@@ -736,7 +804,21 @@ ipcMain.on('claude:send-message', async (_event, { message, conversationId, cwd,
       console.warn('[td-ide:acp] setMode failed:', (err as Error).message)
     }
 
-    const response = await acpManager.prompt(conversationId, message)
+    // When session resume failed, replay conversation history so Claude has context
+    let promptText = message
+    if (needsHistoryReplay) {
+      const priorMessages = getMessagesByConversation(conversationId)
+      // Exclude the last user message (the one we're about to send)
+      // It was already inserted into DB by the renderer before this IPC call
+      const history = priorMessages.slice(0, -1)
+      if (history.length > 0) {
+        const historyBlock = formatConversationHistory(history)
+        promptText = historyBlock + '\n\n' + message
+        console.log('[td-ide] Replaying', history.length, 'messages as context for recovered session')
+      }
+    }
+
+    const response = await acpManager.prompt(conversationId, promptText)
 
     // Send the prompt response (stop reason, usage) as a final stream event
     sendToRenderer('claude:stream', {
@@ -793,6 +875,36 @@ ipcMain.handle('terminal:create', (_event, { id, cwd, shell: shellPath }: { id: 
     ptyProcess.onData((data) => {
       sendToRenderer('terminal:data', { id, data })
     })
+
+    ptyProcess.onExit(({ exitCode }) => {
+      sendToRenderer('terminal:exit', { id, exitCode })
+      ptyProcesses.delete(id)
+    })
+
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: String((err as Error).message || err) }
+  }
+})
+
+ipcMain.handle('terminal:createWithCommand', (_event, { id, cwd, command }: { id: string; cwd: string; command: string }) => {
+  try {
+    const ptyProcess = pty.spawn(getDefaultShell(), [], {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 10,
+      cwd: cwd || app.getPath('home'),
+      env: { ...process.env } as Record<string, string>
+    })
+
+    ptyProcesses.set(id, ptyProcess)
+
+    ptyProcess.onData((data) => {
+      sendToRenderer('terminal:data', { id, data })
+    })
+
+    // Write command to the interactive shell so it stays open after execution
+    ptyProcess.write(command + '\n')
 
     ptyProcess.onExit(({ exitCode }) => {
       sendToRenderer('terminal:exit', { id, exitCode })

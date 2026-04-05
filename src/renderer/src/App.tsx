@@ -164,12 +164,18 @@ function App(): JSX.Element {
   }, [])
   const [planContent, setPlanContent] = useState('')
   const [planEntries, setPlanEntries] = useState<PlanEntry[]>([])
-  const [planConvId, setPlanConvId] = useState<string | null>(null)
+  const [planConvId, _setPlanConvId] = useState<string | null>(null)
+  const planConvIdRef = useRef<string | null>(null)
+  const setPlanConvId = useCallback((id: string | null) => {
+    planConvIdRef.current = id
+    _setPlanConvId(id)
+  }, [])
   const [pendingPlanApproval, setPendingPlanApproval] = useState<{ requestId: string; conversationId: string } | null>(null)
   const [diffViewData, setDiffViewData] = useState<DiffViewData | null>(null)
   const [toolDetailTool, setToolDetailTool] = useState<ToolBlock | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(300)
+  const [shellSession, setShellSession] = useState<{ id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null>(null)
   const [useWorktree, setUseWorktree] = useState(false)
   const [interruptedConvIds, setInterruptedConvIds] = useState<Set<string>>(new Set())
   const [usageOpen, setUsageOpen] = useState(false)
@@ -188,8 +194,6 @@ function App(): JSX.Element {
   const projectsRef = useRef(projects)
   useEffect(() => { projectsRef.current = projects }, [projects])
   useEffect(() => { window.api.getHomedir().then(setHomedir) }, [])
-  // Track last user message per conversation for title generation
-  const lastUserMessages = useRef(new Map<string, string>())
 
   // Track which conversations have had their messages loaded from DB
   const loadedConvs = useRef(new Set<string>())
@@ -212,6 +216,11 @@ function App(): JSX.Element {
     () => activeProject?.conversations.filter((c) => !c.archived) ?? [],
     [activeProject?.conversations]
   )
+  const userMessageHistory = useMemo(
+    () => activeConversation?.messages.filter((m) => m.role === 'user').map((m) => m.content) || [],
+    [activeConversation?.messages]
+  )
+  const activeWorktreePath = activeConversation?.worktreePath ?? null
   const isLoading = activeConversationId ? loadingConvs.has(activeConversationId) : false
 
   // Per-conversation permission mode (defaults to 'approve'), persisted across restarts
@@ -405,11 +414,12 @@ function App(): JSX.Element {
       setGitDiffStats({ additions: 0, deletions: 0 })
       return
     }
-    window.api.gitStatus(activeProject.path).then((result) => {
+    const effectivePath = activeWorktreePath || activeProject.path
+    window.api.gitStatus(effectivePath).then((result) => {
       setGitBranch(result.isRepo ? result.branch : null)
     })
-    window.api.gitDiffStats(activeProject.path).then(setGitDiffStats)
-  }, [activeProject])
+    window.api.gitDiffStats(effectivePath).then(setGitDiffStats)
+  }, [activeProject, activeWorktreePath])
 
   useEffect(() => { refreshGitInfo() }, [refreshGitInfo])
 
@@ -685,9 +695,6 @@ function App(): JSX.Element {
       addMessage(convId, assistantMessage)
       window.api.addMessage(assistantMsgId, convId, 'assistant', '', '[]', '', '[]')
 
-      // Track user message for title generation
-      lastUserMessages.current.set(convId, text)
-
       // Initialize per-conversation buffer
       buffers.current.set(convId, { text: '', tools: [], reasoning: '', contentBlocks: [], assistantMsgId, startedAt: Date.now(), permissionMode })
       convPermissionModes.current.set(convId, permissionMode)
@@ -721,6 +728,28 @@ function App(): JSX.Element {
       }
 
       window.api.sendMessage(finalMessage, convId, cwd, permissionMode)
+
+      // Auto-generate/update title at the start of the session (using just the user message)
+      window.api.generateTitle(convId, text).then((newTitle) => {
+        if (newTitle) {
+          setProjects((p2) =>
+            p2.map((proj) => ({
+              ...proj,
+              conversations: proj.conversations.map((c) =>
+                c.id === convId ? { ...c, title: newTitle } : c
+              )
+            }))
+          )
+          setRecentlyRetitled((s) => new Set(s).add(convId!))
+          setTimeout(() => {
+            setRecentlyRetitled((s) => {
+              const next = new Set(s)
+              next.delete(convId!)
+              return next
+            })
+          }, 3000)
+        }
+      })
     },
     [activeConversationId, activeProject, activeProjectId, createConversation, addMessage, permissionMode]
   )
@@ -892,11 +921,12 @@ function App(): JSX.Element {
         window.api.updateMessage(buf.assistantMsgId, buf.text, JSON.stringify(buf.tools), buf.reasoning, duration, JSON.stringify(buf.contentBlocks))
         buffers.current.delete(conversationId)
       } else if (sessionUpdate === 'plan') {
-        // ACP sends plan updates for internal agent todos — only show in plan sidebar
-        // when the conversation is actually in plan permission mode
+        // Show plan task updates when in plan mode OR when the plan sidebar is already open
+        // (e.g. after approving a plan and switching to full mode for execution)
         const convMode = buf?.permissionMode || convPermissionModes.current.get(conversationId)
-        if (convMode !== 'plan') {
-          // Not in plan mode — ignore (these are internal agent task tracking)
+        const sidebarShowingThisConv = planSidebarOpenRef.current && planConvIdRef.current === conversationId
+        if (convMode !== 'plan' && !sidebarShowingThisConv) {
+          // Not relevant — ignore
         } else {
           const rawEntries = update.entries as Array<Record<string, unknown>> | undefined
           if (rawEntries && rawEntries.length > 0) {
@@ -962,40 +992,13 @@ function App(): JSX.Element {
       }
       convPermissionModes.current.delete(conversationId)
       // Refresh git diff stats after agent may have modified files
-      if (activeProject) {
-        window.api.gitDiffStats(activeProject.path).then(setGitDiffStats)
-      }
+      refreshGitInfo()
       setLoadingConvs((prev) => {
         const next = new Set(prev)
         next.delete(conversationId)
         return next
       })
 
-      // Auto-generate/update title after each response if not manually edited
-      const userMsg = lastUserMessages.current.get(conversationId) || ''
-      if (userMsg || assistantText) {
-        window.api.generateTitle(conversationId, userMsg || assistantText.slice(0, 200), assistantText).then((newTitle) => {
-          if (newTitle) {
-            setProjects((p2) =>
-              p2.map((proj) => ({
-                ...proj,
-                conversations: proj.conversations.map((c) =>
-                  c.id === conversationId ? { ...c, title: newTitle } : c
-                )
-              }))
-            )
-            // Flash "title updated" indicator
-            setRecentlyRetitled((s) => new Set(s).add(conversationId))
-            setTimeout(() => {
-              setRecentlyRetitled((s) => {
-                const next = new Set(s)
-                next.delete(conversationId)
-                return next
-              })
-            }, 3000)
-          }
-        })
-      }
 
       // Send desktop notification when conversation finishes in the background
       if (assistantText && (document.hidden || conversationId !== activeConversationIdRef.current)) {
@@ -1098,7 +1101,6 @@ function App(): JSX.Element {
       }
       setPendingApprovals((prev) => [...prev, newDenial])
       setApprovalConvId(data.conversationId)
-      if (data.conversationId) navigateToConversation(data.conversationId)
     })
     return unsub
   }, [navigateToConversation])
@@ -1122,13 +1124,13 @@ function App(): JSX.Element {
   }, [])
 
   const handleApproveAllForSession = useCallback(() => {
-    // 'allow_always' — agent will auto-allow this tool for rest of session
     for (const tool of pendingApprovals) {
       window.api.respondToPermission(tool.tool_use_id, 'allow_always')
     }
+    setPermissionMode('full')
     setPendingApprovals([])
     setApprovalConvId(null)
-  }, [pendingApprovals])
+  }, [pendingApprovals, setPermissionMode])
 
   const handleRejectAllChanges = useCallback(() => {
     for (const tool of pendingApprovals) {
@@ -1143,9 +1145,9 @@ function App(): JSX.Element {
     if (!pendingPlanApproval) return
     window.api.respondToPermission(pendingPlanApproval.requestId, 'allow')
     setPendingPlanApproval(null)
-    setPlanSidebarOpen(false)
     setPermissionMode('full')
-  }, [pendingPlanApproval, setPlanSidebarOpen, setPermissionMode])
+    // Keep sidebar open to show task progress
+  }, [pendingPlanApproval, setPermissionMode])
 
   const handleRejectPlan = useCallback(() => {
     if (!pendingPlanApproval) return
@@ -1178,6 +1180,67 @@ function App(): JSX.Element {
     )
   }, [])
 
+  const handleReorderProjects = useCallback(async (orderedIds: string[]) => {
+    setProjects((prev) => {
+      const map = new Map(prev.map(p => [p.id, p]))
+      return orderedIds.map(id => map.get(id)!).filter(Boolean)
+    })
+    await window.api.reorderProjects(orderedIds)
+  }, [])
+
+  const handleCreateWorktree = useCallback(async (branchName: string) => {
+    if (!activeProject || !activeConversationId) return { success: false, error: 'No active project or conversation' }
+    const wtPath = `${activeProject.path}/../.td-worktrees/${branchName}`
+    const result = await window.api.gitWorktreeAdd(activeProject.path, wtPath, undefined, branchName)
+    if (result.success) {
+      await window.api.setConversationWorktree(activeConversationId, wtPath)
+      setProjects((prev) =>
+        prev.map((p) => ({
+          ...p,
+          conversations: p.conversations.map((c) =>
+            c.id === activeConversationId ? { ...c, worktreePath: wtPath } : c
+          )
+        }))
+      )
+      refreshGitInfo()
+    }
+    return result
+  }, [activeProject, activeConversationId, refreshGitInfo])
+
+  const handleSelectWorktree = useCallback(async (path: string | null) => {
+    if (!activeConversationId) return
+    await window.api.setConversationWorktree(activeConversationId, path)
+    setProjects((prev) =>
+      prev.map((p) => ({
+        ...p,
+        conversations: p.conversations.map((c) =>
+          c.id === activeConversationId ? { ...c, worktreePath: path } : c
+        )
+      }))
+    )
+    refreshGitInfo()
+  }, [activeConversationId, refreshGitInfo])
+
+  const handleRemoveWorktree = useCallback(async (path: string) => {
+    if (!activeProject) return { success: false, error: 'No active project' }
+    const result = await window.api.gitWorktreeRemove(activeProject.path, path)
+    if (result.success) {
+      if (activeWorktreePath === path && activeConversationId) {
+        await window.api.setConversationWorktree(activeConversationId, null)
+        setProjects((prev) =>
+          prev.map((p) => ({
+            ...p,
+            conversations: p.conversations.map((c) =>
+              c.id === activeConversationId ? { ...c, worktreePath: null } : c
+            )
+          }))
+        )
+      }
+      refreshGitInfo()
+    }
+    return result
+  }, [activeProject, activeWorktreePath, activeConversationId, refreshGitInfo])
+
   const handleDeleteProject = useCallback(async (projectId: string) => {
     await window.api.deleteProject(projectId)
     setProjects((prev) => prev.filter((p) => p.id !== projectId))
@@ -1208,7 +1271,6 @@ function App(): JSX.Element {
     usageMap.current.delete(conversationId)
     finalTexts.current.delete(conversationId)
     convPermissionModes.current.delete(conversationId)
-    lastUserMessages.current.delete(conversationId)
     setProjects((prev) =>
       prev.map((p) => ({
         ...p,
@@ -1369,6 +1431,8 @@ function App(): JSX.Element {
         onAddProject={handleAddProject}
         onRenameProject={handleRenameProject}
         onDeleteProject={handleDeleteProject}
+        onReorderProjects={handleReorderProjects}
+        onKillSession={(convId) => window.api.cancelMessage(convId)}
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
         onArchiveConversation={handleArchiveConversation}
@@ -1408,8 +1472,7 @@ function App(): JSX.Element {
               activeConversationId={activeConversationId}
               loadingConversations={loadingConvs}
               interruptedConversations={interruptedConvIds}
-              recentlyRetitled={recentlyRetitled}
-              queuedCounts={new Map(Array.from(messageQueue.current.entries()).map(([k, v]) => [k, v.length]))}
+              pendingPermissionConvId={approvalConvId}
               onSelectConversation={setActiveConversationId}
               onArchiveConversation={(id) => handleArchiveConversation(id, true)}
               onRenameConversation={handleRenameConversation}
@@ -1523,7 +1586,6 @@ function App(): JSX.Element {
                 onApprove={(approved) => { handleApproveChanges(approved); setDiffViewData(null) }}
                 onApproveAll={() => { handleApproveAllForSession(); setDiffViewData(null) }}
                 onReject={() => { handleRejectAllChanges(); setDiffViewData(null) }}
-                onViewDiff={setDiffViewData}
               />
             )}
             <InputBar
@@ -1555,8 +1617,6 @@ function App(): JSX.Element {
                 else next.add(tool)
                 return next
               })}
-              useWorktree={useWorktree}
-              onUseWorktreeChange={setUseWorktree}
               onShowUsage={() => setUsageOpen(true)}
               contextTokens={activeConversationId ? (contextTokensMap.get(activeConversationId) || 0) : 0}
               apiMode={apiMode}
@@ -1573,6 +1633,14 @@ function App(): JSX.Element {
               projectPath={activeProject?.path || null}
               onBranchChange={(branch) => { setGitBranch(branch); refreshGitInfo() }}
               worktreePath={activeConversation?.worktreePath || null}
+              messageHistory={userMessageHistory}
+              onCreateWorktree={handleCreateWorktree}
+              onSelectWorktree={handleSelectWorktree}
+              onRemoveWorktree={handleRemoveWorktree}
+              terminalOpen={terminalOpen}
+              onToggleTerminal={() => setTerminalOpen((prev) => !prev)}
+              shellSession={shellSession}
+              onShellSession={setShellSession}
             />
             <UsageDialog
               open={usageOpen}
