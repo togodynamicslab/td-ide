@@ -79,9 +79,13 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.commit_sha }}
 
-      - name: Setup Python setuptools
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install setuptools for node-gyp
         run: pip install setuptools
-        shell: bash
 
       - name: Setup Node
         uses: actions/setup-node@v4
