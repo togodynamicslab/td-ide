@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { ArrowLeft, Puzzle, FileText, Terminal, Shield, Type, Bug, Globe, FolderOpen, Keyboard } from 'lucide-react'
+import { ArrowLeft, Puzzle, FileText, Terminal, Shield, Type, Bug, Globe, FolderOpen, Keyboard, Webhook } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import McpSettings from './McpSettings'
 import AppearanceSettings from './settings/AppearanceSettings'
@@ -8,6 +8,7 @@ import ClaudeMdSettings from './settings/ClaudeMdSettings'
 import CommandsSettings from './settings/CommandsSettings'
 import PermissionsSettings from './settings/PermissionsSettings'
 import KeyboardSettings from './settings/KeyboardSettings'
+import HooksSettings from './settings/HooksSettings'
 import type { Project } from '../App'
 import type { ShortcutBinding, ShortcutModifiers } from '../hooks/useKeyboardShortcuts'
 
@@ -35,6 +36,7 @@ const allNavItems: NavItem[] = [
   { id: 'claude-md', label: 'CLAUDE.md', icon: FileText, scopes: ['global', 'project'] },
   { id: 'commands', label: 'Commands', icon: Terminal, scopes: ['global', 'project'] },
   { id: 'permissions', label: 'Permissions', icon: Shield, scopes: ['global', 'project'] },
+  { id: 'hooks', label: 'Hooks', icon: Webhook, scopes: ['global'] },
   { id: 'mcp', label: 'MCP Servers', icon: Puzzle, scopes: ['project'] },
   { id: 'appearance', label: 'Appearance', icon: Type, scopes: ['global'] },
   { id: 'keyboard', label: 'Keyboard', icon: Keyboard, scopes: ['global'] },
@@ -125,6 +127,10 @@ function SettingsPage({ project, homedir, scope, onClose, contentFontSize, onCon
 
             {activeSection === 'permissions' && (
               <PermissionsSettings homedir={homedir} projectPath={project?.path} fixedScope={fixedScope} />
+            )}
+
+            {activeSection === 'hooks' && (
+              <HooksSettings homedir={homedir} />
             )}
 
             {activeSection === 'appearance' && (
