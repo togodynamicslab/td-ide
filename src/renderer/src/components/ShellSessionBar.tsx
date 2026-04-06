@@ -41,6 +41,13 @@ export default function ShellSessionBar({ sessionId, command, cwd, scope, onScop
   const [status, setStatus] = useState<'running' | 'exited'>('running')
   const [exitCode, setExitCode] = useState<number | null>(null)
 
+  // Use refs for cwd/command so the effect only depends on sessionId
+  // This prevents PTY re-creation when projectPath changes during conversation switches
+  const cwdRef = useRef(cwd)
+  const commandRef = useRef(command)
+  cwdRef.current = cwd
+  commandRef.current = command
+
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -68,8 +75,8 @@ export default function ShellSessionBar({ sessionId, command, cwd, scope, onScop
     termRef.current = terminal
     fitRef.current = fitAddon
 
-    // Spawn PTY with command
-    window.api.terminalCreateWithCommand(sessionId, cwd, command).then((result) => {
+    // Spawn PTY with command (use refs to avoid re-creation on prop changes)
+    window.api.terminalCreateWithCommand(sessionId, cwdRef.current, commandRef.current).then((result) => {
       if (disposed) return
       if (!result.success) {
         terminal.write(`\r\n\x1b[31mFailed to run command: ${result.error}\x1b[0m\r\n`)
@@ -135,7 +142,7 @@ export default function ShellSessionBar({ sessionId, command, cwd, scope, onScop
       termRef.current = null
       fitRef.current = null
     }
-  }, [sessionId, cwd, command])
+  }, [sessionId])
 
   // Re-fit when expanded changes
   useEffect(() => {
@@ -155,12 +162,12 @@ export default function ShellSessionBar({ sessionId, command, cwd, scope, onScop
     }
   }, [expanded, sessionId])
 
-  // Re-focus terminal after expand
+  // Re-focus terminal after expand or status change
   useEffect(() => {
     if (expanded && termRef.current) {
       setTimeout(() => termRef.current?.focus(), 100)
     }
-  }, [expanded])
+  }, [expanded, status])
 
   const handleStop = () => {
     window.api.terminalInput(sessionId, '\x03')
@@ -188,9 +195,9 @@ export default function ShellSessionBar({ sessionId, command, cwd, scope, onScop
   return (
     <div
       className="border-b border-td-border/30 bg-td-bg"
+      data-terminal="shell-session"
       onKeyDown={(e) => e.stopPropagation()}
       onKeyUp={(e) => e.stopPropagation()}
-      onKeyPress={(e) => e.stopPropagation()}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5">
@@ -250,16 +257,16 @@ export default function ShellSessionBar({ sessionId, command, cwd, scope, onScop
         </div>
       </div>
 
-      {/* Terminal body */}
+      {/* Terminal body — wrapper isolates events, inner div is xterm mount point */}
       <div
         className={`overflow-hidden transition-all duration-200 ${expanded ? 'max-h-[200px]' : 'max-h-0'}`}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); termRef.current?.focus() }}
       >
         <div
           ref={containerRef}
           className="w-full"
           style={{ height: '200px', padding: '2px 6px' }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); termRef.current?.focus() }}
         />
       </div>
     </div>

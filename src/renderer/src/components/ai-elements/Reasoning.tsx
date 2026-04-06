@@ -20,12 +20,10 @@ export default function Reasoning({
   const [open, setOpen] = useState(isStreaming)
   const wasStreamingRef = useRef(isStreaming)
 
-  // Auto-open when streaming starts, auto-close when it ends
+  // Auto-open when streaming starts, stay open while thinking
   useEffect(() => {
     if (isStreaming && !wasStreamingRef.current) {
       setOpen(true)
-    } else if (!isStreaming && wasStreamingRef.current) {
-      setOpen(false)
     }
     wasStreamingRef.current = isStreaming
   }, [isStreaming])
@@ -67,7 +65,10 @@ export default function Reasoning({
 
       {/* Collapsible content — no border/box, just indented text */}
       {open && (
-        <div className="mt-1 pl-6 pr-1 text-xs text-td-text-tertiary/80 leading-relaxed whitespace-pre-wrap overflow-x-auto max-h-[300px] overflow-y-auto">
+        <div className={cn(
+          'mt-1 pl-6 pr-1 text-xs leading-relaxed whitespace-pre-wrap overflow-x-auto max-h-[300px] overflow-y-auto',
+          isStreaming ? 'thinking-shimmer' : 'text-td-text-tertiary/80'
+        )}>
           {content}
         </div>
       )}

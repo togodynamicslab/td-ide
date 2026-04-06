@@ -128,13 +128,14 @@ export default function TerminalInstance({ id, cwd, visible }: TerminalInstanceP
     }
   }, [id, cwd])
 
-  // Re-fit when visibility changes
+  // Re-fit and re-focus when visibility changes
   useEffect(() => {
     if (visible && fitRef.current) {
       const timer = setTimeout(() => {
         try {
           fitRef.current?.fit()
           syncSize()
+          termRef.current?.focus()
         } catch {
           // ignore
         }
@@ -145,9 +146,19 @@ export default function TerminalInstance({ id, cwd, visible }: TerminalInstanceP
 
   return (
     <div
-      ref={containerRef}
       className="h-full w-full"
-      style={{ display: visible ? 'block' : 'none', padding: '4px 8px' }}
-    />
+      data-terminal="panel"
+      style={{ display: visible ? 'block' : 'none' }}
+      onKeyDown={(e) => e.stopPropagation()}
+      onKeyUp={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); termRef.current?.focus() }}
+    >
+      <div
+        ref={containerRef}
+        className="h-full w-full"
+        style={{ padding: '4px 8px' }}
+      />
+    </div>
   )
 }
