@@ -61,6 +61,7 @@ export interface Project {
   id: string
   name: string
   path: string
+  additionalPaths: string[]
   conversations: Conversation[]
 }
 
@@ -101,6 +102,22 @@ export interface ConversationUsage {
   durationMs: number
   modelUsage: Record<string, ModelUsageEntry>
   rateLimitResetsAt?: number
+}
+
+export type ToolActionType = 'read' | 'edit' | 'write' | 'execute' | 'web' | 'agent' | 'other'
+const EMPTY_ALLOWED_SET = new Set<string>()
+const EMPTY_DENIALS: DeniedTool[] = []
+
+/** Detect the permission action type from a tool name string */
+export function getToolActionType(toolName: string): ToolActionType {
+  const lower = toolName.toLowerCase()
+  if (lower.includes('read') || lower.includes('glob') || lower.includes('grep') || lower.includes('search')) return 'read'
+  if (lower.includes('edit')) return 'edit'
+  if (lower.includes('write')) return 'write'
+  if (lower.includes('bash') || lower.includes('execute')) return 'execute'
+  if (lower.includes('webfetch') || lower.includes('websearch') || lower.includes('web_fetch') || lower.includes('web_search')) return 'web'
+  if (lower.includes('agent')) return 'agent'
+  return 'other'
 }
 
 export interface DeniedTool {
@@ -148,8 +165,10 @@ function App(): JSX.Element {
   const [permissionDenied, setPermissionDenied] = useState(false)
   const [deniedCount, setDeniedCount] = useState(0)
   const [deniedConversationId, setDeniedConversationId] = useState<string | null>(null)
-  const [pendingApprovals, setPendingApprovals] = useState<DeniedTool[]>([])
-  const [approvalConvId, setApprovalConvId] = useState<string | null>(null)
+  const [pendingApprovalsMap, setPendingApprovalsMap] = useState<Map<string, DeniedTool[]>>(new Map())
+  const [alwaysAllowedTypesMap, setAlwaysAllowedTypesMap] = useState<Map<string, Set<string>>>(new Map())
+  const alwaysAllowedTypesRef = useRef(alwaysAllowedTypesMap)
+  useEffect(() => { alwaysAllowedTypesRef.current = alwaysAllowedTypesMap }, [alwaysAllowedTypesMap])
   const [gitBranch, setGitBranch] = useState<string | null>(null)
   const [gitDiffStats, setGitDiffStats] = useState<{ additions: number; deletions: number }>({ additions: 0, deletions: 0 })
   const [settingsOpen, setSettingsOpen] = useState<false | 'global' | 'project'>(false)
@@ -223,6 +242,16 @@ function App(): JSX.Element {
   const activeWorktreePath = activeConversation?.worktreePath ?? null
   const isLoading = activeConversationId ? loadingConvs.has(activeConversationId) : false
 
+  // Per-conversation pending approvals — derived for active conversation
+  const pendingApprovals = activeConversationId
+    ? (pendingApprovalsMap.get(activeConversationId) ?? EMPTY_DENIALS)
+    : EMPTY_DENIALS
+  // Set of conversation IDs that have pending approvals (for sidebar indicator)
+  const pendingPermissionConvIds = useMemo(
+    () => new Set(Array.from(pendingApprovalsMap.keys()).filter((k) => (pendingApprovalsMap.get(k)?.length ?? 0) > 0)),
+    [pendingApprovalsMap]
+  )
+
   // Per-conversation permission mode (defaults to 'approve'), persisted across restarts
   const permissionMode: PermissionMode = activeConversationId
     ? (perConvPermission.get(activeConversationId) || 'approve')
@@ -240,15 +269,33 @@ function App(): JSX.Element {
     })
   }, [activeConversationId])
 
+  // Current conversation's always-allowed action types
+  const convKey = activeConversationId || '__new__'
+  const currentAlwaysAllowed = useMemo(
+    () => alwaysAllowedTypesMap.get(convKey) ?? EMPTY_ALLOWED_SET,
+    [alwaysAllowedTypesMap, convKey]
+  )
+  const handleToggleAlwaysAllowed = useCallback((actionType: string) => {
+    setAlwaysAllowedTypesMap((prev) => {
+      const next = new Map(prev)
+      const types = new Set(prev.get(convKey) || [])
+      if (types.has(actionType)) types.delete(actionType)
+      else types.add(actionType)
+      next.set(convKey, types)
+      return next
+    })
+  }, [convKey])
+
   // --- Load projects from DB on mount, then restore saved state ---
   useEffect(() => {
     const init = async () => {
       // Load projects
       const rows = await window.api.getProjects()
-      const loaded: Project[] = (rows as { id: string; name: string; path: string; createdAt: Date }[]).map((r) => ({
+      const loaded: Project[] = (rows as { id: string; name: string; path: string; additionalPaths?: string; createdAt: Date }[]).map((r) => ({
         id: r.id,
         name: r.name,
         path: r.path,
+        additionalPaths: JSON.parse(r.additionalPaths || '[]'),
         conversations: [],
         createdAt: r.createdAt
       }))
@@ -479,7 +526,7 @@ function App(): JSX.Element {
     const name = folderPath.split(/[/\\]/).pop() || folderPath
     const id = Date.now().toString()
     await window.api.addProject(id, name, folderPath)
-    const project: Project = { id, name, path: folderPath, conversations: [] }
+    const project: Project = { id, name, path: folderPath, additionalPaths: [], conversations: [] }
     setProjects((prev) => [...prev, project])
     setActiveProjectId(id)
     setActiveConversationId(null)
@@ -727,7 +774,8 @@ function App(): JSX.Element {
         }
       }
 
-      window.api.sendMessage(finalMessage, convId, cwd, permissionMode)
+      const additionalDirectories = activeProject.additionalPaths.length > 0 ? activeProject.additionalPaths : undefined
+      window.api.sendMessage(finalMessage, convId, cwd, permissionMode, additionalDirectories)
 
       // Auto-generate/update title at the start of the session (using just the user message)
       window.api.generateTitle(convId, text).then((newTitle) => {
@@ -1094,13 +1142,27 @@ function App(): JSX.Element {
         return
       }
 
+      const toolName = toolTitle || 'Tool'
+      const actionType = getToolActionType(toolName)
+
+      // Auto-approve if this action type was already always-allowed for this conversation
+      const allowedTypes = alwaysAllowedTypesRef.current.get(data.conversationId)
+      if (allowedTypes?.has(actionType)) {
+        window.api.respondToPermission(data.requestId, 'allow_always')
+        return
+      }
+
       const newDenial: DeniedTool = {
-        tool_name: toolTitle || 'Tool',
+        tool_name: toolName,
         tool_use_id: data.requestId,
         tool_input: (data.toolCall as Record<string, unknown>)?.rawInput as Record<string, unknown> || {}
       }
-      setPendingApprovals((prev) => [...prev, newDenial])
-      setApprovalConvId(data.conversationId)
+      setPendingApprovalsMap((prev) => {
+        const next = new Map(prev)
+        const existing = prev.get(data.conversationId) || []
+        next.set(data.conversationId, [...existing, newDenial])
+        return next
+      })
     })
     return unsub
   }, [navigateToConversation])
@@ -1113,33 +1175,51 @@ function App(): JSX.Element {
   }, [navigateToConversation])
 
   const handleApproveChanges = useCallback(async (approved: DeniedTool[]) => {
-    // With ACP, approving sends the permission response back to the agent
-    // The agent executes the tool itself — no client-side file writes needed
+    if (!activeConversationId) return
     for (const tool of approved) {
-      // tool_use_id is the ACP requestId, 'allow' is the optionId for allow_once
       window.api.respondToPermission(tool.tool_use_id, 'allow')
     }
-    setPendingApprovals([])
-    setApprovalConvId(null)
-  }, [])
+    setPendingApprovalsMap((prev) => {
+      const next = new Map(prev)
+      next.delete(activeConversationId)
+      return next
+    })
+  }, [activeConversationId])
 
   const handleApproveAllForSession = useCallback(() => {
-    for (const tool of pendingApprovals) {
+    if (!activeConversationId) return
+    const convDenials = pendingApprovalsMap.get(activeConversationId) || []
+    const prevTypes = alwaysAllowedTypesRef.current.get(activeConversationId) || new Set<string>()
+    const newTypes = new Set(prevTypes)
+    for (const tool of convDenials) {
+      const actionType = getToolActionType(tool.tool_name)
+      newTypes.add(actionType)
       window.api.respondToPermission(tool.tool_use_id, 'allow_always')
     }
-    setPermissionMode('full')
-    setPendingApprovals([])
-    setApprovalConvId(null)
-  }, [pendingApprovals, setPermissionMode])
+    setAlwaysAllowedTypesMap((prev) => {
+      const next = new Map(prev)
+      next.set(activeConversationId, newTypes)
+      return next
+    })
+    setPendingApprovalsMap((prev) => {
+      const next = new Map(prev)
+      next.delete(activeConversationId)
+      return next
+    })
+  }, [pendingApprovalsMap, activeConversationId])
 
   const handleRejectAllChanges = useCallback(() => {
-    for (const tool of pendingApprovals) {
-      // 'reject' is the optionId for reject_once
+    if (!activeConversationId) return
+    const convDenials = pendingApprovalsMap.get(activeConversationId) || []
+    for (const tool of convDenials) {
       window.api.respondToPermission(tool.tool_use_id, 'reject')
     }
-    setPendingApprovals([])
-    setApprovalConvId(null)
-  }, [pendingApprovals])
+    setPendingApprovalsMap((prev) => {
+      const next = new Map(prev)
+      next.delete(activeConversationId)
+      return next
+    })
+  }, [pendingApprovalsMap, activeConversationId])
 
   const handleApprovePlan = useCallback(() => {
     if (!pendingPlanApproval) return
@@ -1241,6 +1321,14 @@ function App(): JSX.Element {
     return result
   }, [activeProject, activeWorktreePath, activeConversationId, refreshGitInfo])
 
+  const handleUpdateProjectFolders = useCallback(async (projectId: string, additionalPaths: string[]) => {
+    console.log('[App] handleUpdateProjectFolders:', projectId, additionalPaths)
+    setProjects((prev) =>
+      prev.map((p) => (p.id === projectId ? { ...p, additionalPaths } : p))
+    )
+    await window.api.updateProjectAdditionalPaths(projectId, additionalPaths)
+  }, [])
+
   const handleDeleteProject = useCallback(async (projectId: string) => {
     await window.api.deleteProject(projectId)
     setProjects((prev) => prev.filter((p) => p.id !== projectId))
@@ -1271,6 +1359,7 @@ function App(): JSX.Element {
     usageMap.current.delete(conversationId)
     finalTexts.current.delete(conversationId)
     convPermissionModes.current.delete(conversationId)
+    setAlwaysAllowedTypesMap((prev) => { const next = new Map(prev); next.delete(conversationId); return next })
     setProjects((prev) =>
       prev.map((p) => ({
         ...p,
@@ -1423,6 +1512,7 @@ function App(): JSX.Element {
         activeProjectId={activeProjectId}
         activeConversationId={activeConversationId}
         loadingConversations={loadingConvs}
+        pendingPermissionConvIds={pendingPermissionConvIds}
         interruptedConversations={interruptedConvIds}
         queuedCounts={new Map(Array.from(messageQueue.current.entries()).map(([k, v]) => [k, v.length]))}
         onSelectProject={setActiveProjectId}
@@ -1432,6 +1522,7 @@ function App(): JSX.Element {
         onRenameProject={handleRenameProject}
         onDeleteProject={handleDeleteProject}
         onReorderProjects={handleReorderProjects}
+        onUpdateProjectFolders={handleUpdateProjectFolders}
         onKillSession={(convId) => window.api.cancelMessage(convId)}
         onKillAgent={() => window.api.restartAgent()}
         onRenameConversation={handleRenameConversation}
@@ -1473,7 +1564,7 @@ function App(): JSX.Element {
               activeConversationId={activeConversationId}
               loadingConversations={loadingConvs}
               interruptedConversations={interruptedConvIds}
-              pendingPermissionConvId={approvalConvId}
+              pendingPermissionConvIds={pendingPermissionConvIds}
               onSelectConversation={setActiveConversationId}
               onArchiveConversation={(id) => handleArchiveConversation(id, true)}
               onRenameConversation={handleRenameConversation}
@@ -1581,7 +1672,7 @@ function App(): JSX.Element {
                 </button>
               </div>
             )}
-            {pendingApprovals.length > 0 && approvalConvId === activeConversationId && (
+            {pendingApprovals.length > 0 && (
               <ApprovalWidget
                 denials={pendingApprovals}
                 onApprove={(approved) => { handleApproveChanges(approved); setDiffViewData(null) }}
@@ -1642,6 +1733,8 @@ function App(): JSX.Element {
               onToggleTerminal={() => setTerminalOpen((prev) => !prev)}
               shellSession={shellSession}
               onShellSession={setShellSession}
+              alwaysAllowedTypes={currentAlwaysAllowed}
+              onToggleAlwaysAllowed={handleToggleAlwaysAllowed}
             />
             <UsageDialog
               open={usageOpen}

@@ -13,6 +13,7 @@ import {
   getAllProjects,
   insertProject,
   updateProjectName,
+  updateProjectAdditionalPaths,
   updateProjectOrder,
   deleteProject,
   getConversationsByProject,
@@ -101,6 +102,15 @@ ipcMain.handle('dialog:openFolder', async () => {
   })
   if (result.canceled || result.filePaths.length === 0) return null
   return result.filePaths[0]
+})
+
+ipcMain.handle('dialog:openFolders', async () => {
+  if (!mainWindow) return null
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'multiSelections']
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths
 })
 
 ipcMain.handle('image:save', async (_event, { dataUrl, filename }: { dataUrl: string; filename: string }) => {
@@ -201,8 +211,13 @@ ipcMain.handle('db:get-projects', () => {
   return getAllProjects()
 })
 
-ipcMain.handle('db:add-project', (_event, { id, name, path }: { id: string; name: string; path: string }) => {
-  insertProject(id, name, path)
+ipcMain.handle('db:add-project', (_event, { id, name, path, additionalPaths }: { id: string; name: string; path: string; additionalPaths?: string[] }) => {
+  insertProject(id, name, path, additionalPaths)
+  return true
+})
+
+ipcMain.handle('db:update-project-additional-paths', (_event, { id, additionalPaths }: { id: string; additionalPaths: string[] }) => {
+  updateProjectAdditionalPaths(id, additionalPaths)
   return true
 })
 
@@ -791,7 +806,7 @@ const ACP_MODE_MAP: Record<string, string> = {
   approve: 'default'
 }
 
-ipcMain.on('claude:send-message', async (_event, { message, conversationId, cwd, permissionMode }) => {
+ipcMain.on('claude:send-message', async (_event, { message, conversationId, cwd, permissionMode, additionalDirectories }) => {
   try {
     const existingSessionId = conversationId ? getConversationSessionId(conversationId) : null
     const effectiveCwd = cwd || app.getPath('home')
@@ -803,16 +818,16 @@ ipcMain.on('claude:send-message', async (_event, { message, conversationId, cwd,
     let needsHistoryReplay = false
     if (existingSessionId) {
       try {
-        await acpManager.resumeSession(conversationId, existingSessionId, effectiveCwd)
+        await acpManager.resumeSession(conversationId, existingSessionId, effectiveCwd, additionalDirectories)
         sessionId = existingSessionId
       } catch {
         // Resume failed — create new session with permission mode baked in
-        sessionId = await acpManager.newSession(conversationId, effectiveCwd, acpModeId)
+        sessionId = await acpManager.newSession(conversationId, effectiveCwd, acpModeId, additionalDirectories)
         updateConversationSessionId(conversationId, sessionId)
         needsHistoryReplay = true
       }
     } else {
-      sessionId = await acpManager.newSession(conversationId, effectiveCwd, acpModeId)
+      sessionId = await acpManager.newSession(conversationId, effectiveCwd, acpModeId, additionalDirectories)
       updateConversationSessionId(conversationId, sessionId)
     }
 
@@ -980,6 +995,14 @@ app.whenReady().then(async () => {
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
+
+    // Intercept Cmd+W to close tab instead of window
+    window.webContents.on('before-input-event', (event, input) => {
+      if (input.key === 'w' && input.meta && !input.shift && !input.alt && !input.control) {
+        event.preventDefault()
+        window.webContents.send('close-tab')
+      }
+    })
   })
 
   createWindow()

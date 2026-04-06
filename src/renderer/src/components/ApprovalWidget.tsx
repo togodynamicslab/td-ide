@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
-import type { DeniedTool } from '../App'
+import { getToolActionType } from '../App'
+import type { DeniedTool, ToolActionType } from '../App'
 
 interface FileChange {
   tool: DeniedTool
   filePath: string
-  action: 'write' | 'edit' | 'execute' | 'other'
+  action: ToolActionType
   oldString?: string
   newString?: string
   newContent?: string
@@ -91,11 +92,24 @@ function Kbd({ children }: { children: string }) {
   )
 }
 
-const actionVerbs: Record<FileChange['action'], string> = {
-  write: 'Create',
+const actionVerbs: Record<ToolActionType, string> = {
+  read: 'Read',
   edit: 'Edit',
+  write: 'Create',
   execute: 'Run',
+  web: 'Fetch',
+  agent: 'Launch',
   other: 'Use'
+}
+
+const actionNounPlurals: Record<ToolActionType, string> = {
+  read: 'reads',
+  edit: 'edits',
+  write: 'file writes',
+  execute: 'commands',
+  web: 'web access',
+  agent: 'agents',
+  other: 'tool actions'
 }
 
 function ApprovalWidget({ denials, onApprove, onApproveAll, onReject }: ApprovalWidgetProps) {
@@ -103,26 +117,26 @@ function ApprovalWidget({ denials, onApprove, onApproveAll, onReject }: Approval
 
   const changes: FileChange[] = denials.map((d) => {
     const input = d.tool_input
-    const toolName = d.tool_name.toLowerCase()
-    if (toolName.includes('write') && typeof input.file_path === 'string') {
+    const action = getToolActionType(d.tool_name)
+    if (action === 'write' && typeof input.file_path === 'string') {
       return {
-        tool: d, filePath: input.file_path, action: 'write' as const,
+        tool: d, filePath: input.file_path, action,
         newContent: typeof input.content === 'string' ? input.content : undefined
       }
-    } else if (toolName.includes('edit') && typeof input.file_path === 'string') {
+    } else if (action === 'edit' && typeof input.file_path === 'string') {
       return {
-        tool: d, filePath: input.file_path, action: 'edit' as const,
+        tool: d, filePath: input.file_path, action,
         oldString: typeof input.old_string === 'string' ? input.old_string : undefined,
         newString: typeof input.new_string === 'string' ? input.new_string : undefined
       }
-    } else if (toolName.includes('bash') || toolName.includes('execute')) {
+    } else if (action === 'execute') {
       return {
-        tool: d, filePath: d.tool_name, action: 'execute' as const,
+        tool: d, filePath: d.tool_name, action,
         command: typeof input.command === 'string' ? input.command : undefined
       }
     }
     return {
-      tool: d, filePath: String(input.file_path || d.tool_name), action: 'other' as const
+      tool: d, filePath: String(input.file_path || d.tool_name), action
     }
   })
 
@@ -130,6 +144,8 @@ function ApprovalWidget({ denials, onApprove, onApproveAll, onReject }: Approval
   useEffect(() => {
     if (decided) return
     const handler = (e: KeyboardEvent) => {
+      // Don't intercept keyboard events from terminal areas
+      if ((e.target as HTMLElement)?.closest?.('[data-terminal]')) return
       if (e.key === 'Escape') {
         e.preventDefault()
         setDecided(true)
@@ -200,7 +216,7 @@ function ApprovalWidget({ denials, onApprove, onApproveAll, onReject }: Approval
             onClick={() => { setDecided(true); onApproveAll() }}
             className="flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium text-td-text-secondary hover:text-td-text border border-td-border hover:bg-td-hover transition-colors"
           >
-            Always allow for session
+            Always allow {firstChange ? actionNounPlurals[firstChange.action] : 'actions'}
             <span className="flex items-center gap-0.5">
               <Kbd>{isMac ? '⌘' : 'Ctrl'}</Kbd>
               <Kbd>↵</Kbd>

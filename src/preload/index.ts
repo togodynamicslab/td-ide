@@ -7,10 +7,15 @@ const api = {
   windowMaximize: () => ipcRenderer.send('window:maximize'),
   windowClose: () => ipcRenderer.send('window:close'),
   windowIsMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
+  onCloseTab: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('close-tab', handler)
+    return () => ipcRenderer.removeListener('close-tab', handler)
+  },
 
   // Claude process (ACP)
-  sendMessage: (message: string, conversationId: string, cwd: string, permissionMode = 'default') => {
-    ipcRenderer.send('claude:send-message', { message, conversationId, cwd, permissionMode })
+  sendMessage: (message: string, conversationId: string, cwd: string, permissionMode = 'default', additionalDirectories?: string[]) => {
+    ipcRenderer.send('claude:send-message', { message, conversationId, cwd, permissionMode, additionalDirectories })
   },
   cancelMessage: (conversationId: string) => {
     ipcRenderer.send('claude:cancel', { conversationId })
@@ -30,6 +35,9 @@ const api = {
   // Dialog / files
   openFolder: (): Promise<string | null> => {
     return ipcRenderer.invoke('dialog:openFolder')
+  },
+  openFolders: (): Promise<string[] | null> => {
+    return ipcRenderer.invoke('dialog:openFolders')
   },
   saveImage: (dataUrl: string, filename: string): Promise<string> => {
     return ipcRenderer.invoke('image:save', { dataUrl, filename })
@@ -127,8 +135,11 @@ const api = {
   getProjects: (): Promise<unknown[]> => {
     return ipcRenderer.invoke('db:get-projects')
   },
-  addProject: (id: string, name: string, path: string): Promise<boolean> => {
-    return ipcRenderer.invoke('db:add-project', { id, name, path })
+  addProject: (id: string, name: string, path: string, additionalPaths?: string[]): Promise<boolean> => {
+    return ipcRenderer.invoke('db:add-project', { id, name, path, additionalPaths })
+  },
+  updateProjectAdditionalPaths: (id: string, additionalPaths: string[]): Promise<boolean> => {
+    return ipcRenderer.invoke('db:update-project-additional-paths', { id, additionalPaths })
   },
   renameProject: (id: string, name: string): Promise<boolean> => {
     return ipcRenderer.invoke('db:rename-project', { id, name })

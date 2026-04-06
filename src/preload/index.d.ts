@@ -6,9 +6,10 @@ interface ClaudeAPI {
   windowMaximize: () => void
   windowClose: () => void
   windowIsMaximized: () => Promise<boolean>
+  onCloseTab: (callback: () => void) => () => void
 
   // Claude process (ACP)
-  sendMessage: (message: string, conversationId: string, cwd: string, permissionMode?: string) => void
+  sendMessage: (message: string, conversationId: string, cwd: string, permissionMode?: string, additionalDirectories?: string[]) => void
   cancelMessage: (conversationId: string) => void
 
   // Permission handling (ACP)
@@ -26,6 +27,7 @@ interface ClaudeAPI {
 
   // Dialog / files
   openFolder: () => Promise<string | null>
+  openFolders: () => Promise<string[] | null>
   openFile: (cwd: string) => Promise<string[] | null>
   saveImage: (dataUrl: string, filename: string) => Promise<string>
 
@@ -64,7 +66,8 @@ interface ClaudeAPI {
 
   // DB — Projects
   getProjects: () => Promise<unknown[]>
-  addProject: (id: string, name: string, path: string) => Promise<boolean>
+  addProject: (id: string, name: string, path: string, additionalPaths?: string[]) => Promise<boolean>
+  updateProjectAdditionalPaths: (id: string, additionalPaths: string[]) => Promise<boolean>
   renameProject: (id: string, name: string) => Promise<boolean>
   deleteProject: (id: string) => Promise<boolean>
   reorderProjects: (orderedIds: string[]) => Promise<boolean>

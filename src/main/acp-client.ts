@@ -225,12 +225,13 @@ export class AcpClientManager {
     }
   }
 
-  async newSession(conversationId: string, cwd: string, permissionMode?: string): Promise<string> {
+  async newSession(conversationId: string, cwd: string, permissionMode?: string, additionalDirectories?: string[]): Promise<string> {
     await this.ensureInitialized()
 
     const response = await this.connection!.newSession({
       cwd,
       mcpServers: [],
+      ...(additionalDirectories?.length ? { additionalDirectories } : {}),
       ...(permissionMode ? {
         _meta: {
           claudeCode: {
@@ -250,7 +251,7 @@ export class AcpClientManager {
     return sessionId
   }
 
-  async resumeSession(conversationId: string, sessionId: string, cwd: string): Promise<void> {
+  async resumeSession(conversationId: string, sessionId: string, cwd: string, additionalDirectories?: string[]): Promise<void> {
     await this.ensureInitialized()
 
     // Map the session before loading so sessionUpdate callbacks can resolve
@@ -258,7 +259,7 @@ export class AcpClientManager {
     this.conversationToSession.set(conversationId, sessionId)
 
     try {
-      await this.connection!.unstable_resumeSession({ sessionId, cwd })
+      await this.connection!.unstable_resumeSession({ sessionId, cwd, ...(additionalDirectories?.length ? { additionalDirectories } : {}) })
       console.log('[td-ide:acp] Resumed session:', sessionId, '| conv:', conversationId)
     } catch (err) {
       console.warn('[td-ide:acp] Resume failed, will create new session:', (err as Error).message)

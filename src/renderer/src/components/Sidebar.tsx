@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   FolderOpen,
+  FolderPlus,
+  Layers,
   Settings,
   Plus,
   ChevronDown,
@@ -17,6 +19,7 @@ import {
   ArchiveRestore,
   GitFork,
   AlertTriangle,
+  ShieldAlert,
   Wrench,
   PanelLeftClose,
   PanelLeftOpen
@@ -57,6 +60,7 @@ import {
   AlertDialogAction,
   AlertDialogCancel
 } from './ui/alert-dialog'
+import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
@@ -70,6 +74,7 @@ interface AppSidebarProps {
   activeProjectId: string | null
   activeConversationId: string | null
   loadingConversations: Set<string>
+  pendingPermissionConvIds?: Set<string>
   interruptedConversations?: Set<string>
   queuedCounts: Map<string, number>
   onSelectProject: (id: string) => void
@@ -85,6 +90,7 @@ interface AppSidebarProps {
   onNewChatForProject: (projectId: string) => void
   onOpenSettings: () => void
   onOpenProjectSettings?: (projectId: string) => void
+  onUpdateProjectFolders?: (projectId: string, additionalPaths: string[]) => void
   onReorderProjects?: (orderedIds: string[]) => void
   onKillSession?: (conversationId: string) => void
   onKillAgent?: () => void
@@ -126,6 +132,7 @@ function AppSidebar({
   activeProjectId,
   activeConversationId,
   loadingConversations,
+  pendingPermissionConvIds,
   interruptedConversations,
   queuedCounts,
   onSelectProject,
@@ -141,6 +148,7 @@ function AppSidebar({
   onNewChatForProject,
   onOpenSettings,
   onOpenProjectSettings,
+  onUpdateProjectFolders,
   onReorderProjects,
   onKillSession,
   onKillAgent,
@@ -152,6 +160,9 @@ function AppSidebar({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
+  const [folderPickerProject, setFolderPickerProject] = useState<Project | null>(null)
+  const [subfolders, setSubfolders] = useState<{ name: string; path: string }[]>([])
+  const [selectedFolders, setSelectedFolders] = useState<Set<string>>(new Set())
   const [showArchived, setShowArchived] = useState<Set<string>>(new Set())
   const [recentlyFinished, setRecentlyFinished] = useState<Set<string>>(new Set())
   const prevLoadingRef = useRef<Set<string>>(new Set())
@@ -255,6 +266,34 @@ function AppSidebar({
     if (e.key === 'Enter') commitRename()
     else if (e.key === 'Escape') setEditingId(null)
   }
+
+  const openFolderPicker = useCallback(async (project: Project) => {
+    const entries = await window.api.listDirectory(project.path)
+    const dirs = entries.files
+      .filter((f) => f.isDirectory && !f.name.startsWith('.'))
+      .map((f) => ({ name: f.name, path: `${project.path}/${f.name}` }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    setSubfolders(dirs)
+    setSelectedFolders(new Set(project.additionalPaths))
+    setFolderPickerProject(project)
+  }, [])
+
+  const saveFolderSelection = useCallback(() => {
+    if (!folderPickerProject) return
+    const newPaths = Array.from(selectedFolders)
+    console.log('[Sidebar] saveFolderSelection:', folderPickerProject.id, newPaths, 'handler exists:', !!onUpdateProjectFolders)
+    onUpdateProjectFolders?.(folderPickerProject.id, newPaths)
+    setFolderPickerProject(null)
+  }, [folderPickerProject, selectedFolders, onUpdateProjectFolders])
+
+  const toggleFolder = useCallback((path: string) => {
+    setSelectedFolders((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }, [])
 
   const confirmDelete = () => {
     if (!deleteTarget) return
@@ -399,7 +438,11 @@ function AppSidebar({
                             ) : (
                               <ChevronRight className="h-3 w-3 text-td-muted" />
                             )}
-                            <FolderOpen className="h-4 w-4 text-td-muted" />
+                            {project.additionalPaths.length > 0 ? (
+                              <Layers className="h-4 w-4 text-td-accent" />
+                            ) : (
+                              <FolderOpen className="h-4 w-4 text-td-muted" />
+                            )}
                             {editingId === `project-${project.id}` ? (
                               <input
                                 ref={editInputRef}
@@ -429,6 +472,12 @@ function AppSidebar({
                             <ContextMenuItem onClick={() => onOpenProjectSettings(project.id)}>
                               <Wrench className="h-3.5 w-3.5 mr-2" />
                               Project Settings
+                            </ContextMenuItem>
+                          )}
+                          {onUpdateProjectFolders && (
+                            <ContextMenuItem onClick={() => openFolderPicker(project)}>
+                              <FolderPlus className="h-3.5 w-3.5 mr-2" />
+                              Manage Folders
                             </ContextMenuItem>
                           )}
                           <ContextMenuSeparator />
@@ -473,7 +522,9 @@ function AppSidebar({
                                   }}
                                   className="w-full"
                                 >
-                                  {loadingConversations.has(conv.id) ? (
+                                  {pendingPermissionConvIds?.has(conv.id) ? (
+                                    <ShieldAlert className="h-3 w-3 shrink-0 text-orange-400 animate-pulse" />
+                                  ) : loadingConversations.has(conv.id) ? (
                                     <Loader2 className="h-3 w-3 shrink-0 text-td-accent animate-spin" />
                                   ) : recentlyFinished.has(conv.id) ? (
                                     <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />
@@ -497,7 +548,11 @@ function AppSidebar({
                                   ) : (
                                     <>
                                       <span className="truncate flex-1">{conv.title}</span>
-                                      {loadingConversations.has(conv.id) ? (
+                                      {pendingPermissionConvIds?.has(conv.id) ? (
+                                        <span className="text-[10px] text-orange-400 shrink-0 w-14 text-right animate-pulse">
+                                          Approval...
+                                        </span>
+                                      ) : loadingConversations.has(conv.id) ? (
                                         <span className="text-[10px] text-td-accent shrink-0 w-12 text-right">
                                           {(queuedCounts.get(conv.id) ?? 0) > 0
                                             ? `+${queuedCounts.get(conv.id)} queued`
@@ -667,6 +722,51 @@ function AppSidebar({
           </div>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Folder picker dialog */}
+      <Dialog open={!!folderPickerProject} onOpenChange={(open) => !open && setFolderPickerProject(null)}>
+        <DialogContent>
+          <DialogTitle>Manage Folders — {folderPickerProject?.name}</DialogTitle>
+          <p className="text-xs text-td-muted mt-1 mb-3">
+            Select subfolders of <span className="font-mono">{folderPickerProject?.path}</span> to include as additional workspace roots.
+          </p>
+          {subfolders.length === 0 ? (
+            <p className="text-sm text-td-muted py-4 text-center">No subfolders found</p>
+          ) : (
+            <div className="max-h-64 overflow-y-auto border border-td-border rounded">
+              {subfolders.map((sf) => (
+                <label
+                  key={sf.path}
+                  className="flex items-center gap-2 px-3 py-1.5 hover:bg-td-surface-hover cursor-pointer text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedFolders.has(sf.path)}
+                    onChange={() => toggleFolder(sf.path)}
+                    className="rounded accent-td-accent"
+                  />
+                  <FolderOpen className="h-3.5 w-3.5 text-td-muted shrink-0" />
+                  <span className="truncate">{sf.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 mt-4">
+            <button
+              onClick={() => setFolderPickerProject(null)}
+              className="px-3 py-1.5 text-sm rounded border border-td-border text-td-text hover:bg-td-surface-hover"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={saveFolderSelection}
+              className="px-3 py-1.5 text-sm rounded bg-td-accent text-white hover:bg-blue-600"
+            >
+              Save
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

@@ -8,7 +8,8 @@ import {
   Terminal, Zap, Info, Check, Timer, RefreshCw,
   Code2, Bug, Keyboard, BookOpen, Archive, GitFork, BarChart3,
   Key, Eye, EyeOff, ChevronDown, CircleCheck, Cpu, Search, DollarSign,
-  AlertTriangle, GitBranch, ArrowLeft, ArrowUp, Trash2
+  AlertTriangle, GitBranch, ArrowLeft, ArrowUp, Trash2,
+  Pencil, FilePlus2, TerminalSquare, Wrench
 } from 'lucide-react'
 import { Button } from './ui/button'
 import {
@@ -69,6 +70,8 @@ interface InputBarProps {
   onToggleTerminal: () => void
   shellSession: { id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null
   onShellSession: (session: { id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null) => void
+  alwaysAllowedTypes: Set<string>
+  onToggleAlwaysAllowed: (actionType: string) => void
 }
 
 // --- Slash command definitions ---
@@ -121,6 +124,16 @@ const EFFORT_LABELS: Record<EffortLevel, string> = {
 const PERMISSION_LABELS: Record<PermissionMode, string> = {
   full: 'Full access', approve: 'Approve edits', default: 'Default', plan: 'Plan mode'
 }
+
+const ALWAYS_ALLOWED_OPTIONS = [
+  { type: 'read', label: 'Read / Search', icon: Search },
+  { type: 'edit', label: 'Edits', icon: Pencil },
+  { type: 'write', label: 'File writes', icon: FilePlus2 },
+  { type: 'execute', label: 'Terminal', icon: TerminalSquare },
+  { type: 'web', label: 'Web access', icon: Eye },
+  { type: 'agent', label: 'Agents', icon: Cpu },
+  { type: 'other', label: 'Other tools', icon: Wrench },
+] as const
 
 const MODEL_INFO = ([
   { id: 'opus' as ModelId, description: 'Most capable, complex tasks', badge: 'Best' },
@@ -895,7 +908,8 @@ function InputBar({
   projectPath, onBranchChange, worktreePath, messageHistory,
   onCreateWorktree, onSelectWorktree, onRemoveWorktree,
   terminalOpen, onToggleTerminal,
-  shellSession, onShellSession
+  shellSession, onShellSession,
+  alwaysAllowedTypes, onToggleAlwaysAllowed
 }: InputBarProps): JSX.Element {
   const [text, setText] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
@@ -1096,10 +1110,10 @@ function InputBar({
     // ── Info ──
     {
       name: 'usage',
-      description: 'Show token usage and cost for this session',
+      description: 'Show Claude Code subscription usage (coming soon)',
       icon: <BarChart3 className="h-3.5 w-3.5 text-green-400" />,
       category: 'info' as SlashCategory,
-      action: () => onShowUsage()
+      action: () => setStatusMsg('Usage tracking is coming soon')
     },
     {
       name: 'status',
@@ -1376,6 +1390,25 @@ function InputBar({
   return (
     <TooltipProvider delayDuration={200}>
       <div className="bg-td-bg">
+        {/* Shell session terminal (!! command) — outside form to avoid focus conflicts with textarea */}
+        {shellSession && projectPath && (
+          <div
+            className="px-6 pb-2"
+            style={{ display: shellSession.scope === 'global' || shellSession.conversationId === conversationId ? undefined : 'none' }}
+          >
+            <div className="max-w-3xl mx-auto">
+              <ShellSessionBar
+                sessionId={shellSession.id}
+                command={shellSession.command}
+                cwd={projectPath}
+                scope={shellSession.scope}
+                onScopeToggle={() => onShellSession({ ...shellSession, scope: shellSession.scope === 'global' ? 'conversation' : 'global' })}
+                onClose={() => onShellSession(null)}
+                onExit={(exitCode) => onShellSession(shellSession ? { ...shellSession, exitCode } : null)}
+              />
+            </div>
+          </div>
+        )}
         <div className="px-6 py-3">
         <div className="max-w-3xl mx-auto">
           <form onSubmit={handleSubmit} className="w-full">
@@ -1557,19 +1590,6 @@ function InputBar({
                 </div>
               )}
 
-              {/* Shell session terminal (!! command) */}
-              {shellSession && projectPath && (shellSession.scope === 'global' || shellSession.conversationId === conversationId) && (
-                <ShellSessionBar
-                  sessionId={shellSession.id}
-                  command={shellSession.command}
-                  cwd={projectPath}
-                  scope={shellSession.scope}
-                  onScopeToggle={() => onShellSession({ ...shellSession, scope: shellSession.scope === 'global' ? 'conversation' : 'global' })}
-                  onClose={() => onShellSession(null)}
-                  onExit={(exitCode) => onShellSession(shellSession ? { ...shellSession, exitCode } : null)}
-                />
-              )}
-
               {/* Image previews */}
               {images.length > 0 && (
                 <div className="flex flex-wrap gap-2 px-3 pt-3 pb-1">
@@ -1693,16 +1713,39 @@ function InputBar({
                           : permissionMode === 'plan' ? <MapIcon className="h-3 w-3" />
                           : <ShieldQuestion className="h-3 w-3" />}
                         {PERMISSION_LABELS[permissionMode]}
+                        {alwaysAllowedTypes.size > 0 && permissionMode !== 'full' && (
+                          <span className="text-emerald-400/70">+{alwaysAllowedTypes.size}</span>
+                        )}
                         {disabledTools.size > 0 && <span className="text-td-muted">(-{disabledTools.size})</span>}
                         <ChevronDown className="h-2.5 w-2.5 opacity-50" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent side="top" align="start">
+                    <DropdownMenuContent side="top" align="start" className="min-w-[220px]">
+                      <DropdownMenuLabel className="text-[10px] text-td-muted uppercase tracking-wider">Mode</DropdownMenuLabel>
                       <DropdownMenuRadioGroup value={permissionMode} onValueChange={(v) => onPermissionModeChange(v as PermissionMode)}>
                         <DropdownMenuRadioItem value="full">Full access</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="approve">Approve edits</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="plan">Plan mode</DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
+                      {permissionMode !== 'full' && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuLabel className="text-[10px] text-td-muted uppercase tracking-wider">Always allowed</DropdownMenuLabel>
+                          {ALWAYS_ALLOWED_OPTIONS.map(({ type, label, icon: Icon }) => (
+                            <DropdownMenuCheckboxItem
+                              key={type}
+                              checked={alwaysAllowedTypes.has(type)}
+                              onCheckedChange={() => onToggleAlwaysAllowed(type)}
+                              onSelect={(e) => e.preventDefault()}
+                            >
+                              <span className="flex items-center gap-2">
+                                <Icon className="h-3.5 w-3.5" />
+                                {label}
+                              </span>
+                            </DropdownMenuCheckboxItem>
+                          ))}
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
 

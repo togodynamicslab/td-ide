@@ -85,6 +85,13 @@ export function initDatabase(): void {
     // Column already exists
   }
 
+  // Migration: add additional_paths column to projects (composite workspaces)
+  try {
+    sqlite.exec(`ALTER TABLE projects ADD COLUMN additional_paths TEXT NOT NULL DEFAULT '[]'`)
+  } catch {
+    // Column already exists
+  }
+
   // Session recovery tables
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS app_state (
@@ -115,12 +122,16 @@ export function updateProjectOrder(orderedIds: string[]) {
   }
 }
 
-export function insertProject(id: string, name: string, path: string) {
-  return db.insert(schema.projects).values({ id, name, path, createdAt: new Date() }).run()
+export function insertProject(id: string, name: string, path: string, additionalPaths: string[] = []) {
+  return db.insert(schema.projects).values({ id, name, path, additionalPaths: JSON.stringify(additionalPaths), createdAt: new Date() }).run()
 }
 
 export function updateProjectName(id: string, name: string) {
   return db.update(schema.projects).set({ name }).where(eq(schema.projects.id, id)).run()
+}
+
+export function updateProjectAdditionalPaths(id: string, additionalPaths: string[]) {
+  return db.update(schema.projects).set({ additionalPaths: JSON.stringify(additionalPaths) }).where(eq(schema.projects.id, id)).run()
 }
 
 export function deleteProject(id: string) {
@@ -134,6 +145,7 @@ export function getConversationsByProject(projectId: string) {
     .select()
     .from(schema.conversations)
     .where(eq(schema.conversations.projectId, projectId))
+    .orderBy(asc(schema.conversations.createdAt))
     .all()
 }
 
