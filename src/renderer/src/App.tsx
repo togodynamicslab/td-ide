@@ -15,6 +15,7 @@ import type { DiffViewData } from './components/ApprovalWidget'
 import DiffSidebar from './components/DiffSidebar'
 import ToolDetailSidebar from './components/ToolDetailSidebar'
 import ConversationTabs from './components/ConversationTabs'
+import type { BackgroundSession } from './components/BackgroundCommandBar'
 import { useKeyboardShortcuts, mergeShortcuts, DEFAULT_SHORTCUTS, type ShortcutBinding, type ShortcutModifiers } from './hooks/useKeyboardShortcuts'
 
 export interface ToolBlock {
@@ -195,6 +196,7 @@ function App(): JSX.Element {
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(300)
   const [shellSession, setShellSession] = useState<{ id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null>(null)
+  const [backgroundSessions, setBackgroundSessions] = useState<BackgroundSession[]>([])
   const [useWorktree, setUseWorktree] = useState(false)
   const [interruptedConvIds, setInterruptedConvIds] = useState<Set<string>>(new Set())
   const [usageOpen, setUsageOpen] = useState(false)
@@ -203,8 +205,8 @@ function App(): JSX.Element {
   // Per-conversation context token tracking (latest input_tokens = current context size)
   const [contextTokensMap, setContextTokensMap] = useState<Map<string, number>>(new Map())
 
-  // Per-conversation usage tracking
-  const usageMap = useRef(new Map<string, ConversationUsage>())
+  // Per-conversation usage tracking (state so UI re-renders on updates)
+  const [usageMap, setUsageMap] = useState(new Map<string, ConversationUsage>())
   // Per-conversation plan entries (structured) and text fallback
   const planDrafts = useRef(new Map<string, string>())
   const planEntryDrafts = useRef(new Map<string, PlanEntry[]>())
@@ -222,6 +224,8 @@ function App(): JSX.Element {
   const finalTexts = useRef(new Map<string, string>())
   // Track permission mode per conversation so handleDone can check plan mode after buffer is deleted
   const convPermissionModes = useRef(new Map<string, PermissionMode>())
+  // Map tool call IDs to their tool name (Bash, Agent, etc.) for deferred background session creation
+  const toolNameMapRef = useRef(new Map<string, string>())
   // Per-conversation message queue for queuing messages while Claude is working
   const messageQueue = useRef(new Map<string, { text: string; images: ImageAttachment[] }[]>())
   // Stable ref for processMessage so handleDone inside useEffect can call the latest version
@@ -882,7 +886,6 @@ function App(): JSX.Element {
           updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
         }
       } else if (sessionUpdate === 'tool_call') {
-        // New tool call
         const toolCallId = update.toolCallId as string || `tool-${Date.now()}`
         const title = update.title as string || 'Tool'
         if (title === EXIT_PLAN_MODE_TITLE) return // Handled by Plan Sidebar
@@ -899,11 +902,23 @@ function App(): JSX.Element {
           buf.contentBlocks.push({ type: 'tool_use', tool })
           updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
         }
+
+        // Save toolName metadata so tool_call_update can check run_in_background
+        const meta = update._meta as Record<string, unknown> | undefined
+        const claudeCode = meta?.claudeCode as Record<string, unknown> | undefined
+        const toolName = claudeCode?.toolName as string | undefined
+        if (toolName) {
+          toolNameMapRef.current.set(toolCallId, toolName)
+        }
       } else if (sessionUpdate === 'tool_call_update') {
         // Update to an existing tool call (results, status changes)
         const toolCallId = update.toolCallId as string
         const existing = buf.tools.find((t) => t.id === toolCallId)
         if (existing) {
+          if (update.rawInput !== undefined) {
+            const ri = update.rawInput as Record<string, unknown>
+            existing.input = { ...existing.input, ...ri }
+          }
           if (update.rawOutput !== undefined) {
             existing.input = { ...existing.input, _output: update.rawOutput }
           }
@@ -911,6 +926,61 @@ function App(): JSX.Element {
             existing.input = { ...existing.input, _status: update.status }
           }
           updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
+        }
+
+        // Create or update background session — only for run_in_background Bash or Agent tools
+        const ri = update.rawInput as Record<string, unknown> | undefined
+        const savedToolName = toolNameMapRef.current.get(toolCallId)
+        const isBgBash = savedToolName === 'Bash' && ri?.run_in_background === true
+        const isBgAgent = savedToolName === 'Agent' && ri?.run_in_background === true
+
+        if (isBgBash || isBgAgent) {
+          setBackgroundSessions(prev => {
+            const idx = prev.findIndex(s => s.id === toolCallId)
+            if (idx === -1) {
+              // First update with run_in_background confirmed — create session
+              return [...prev, {
+                id: toolCallId,
+                command: ri?.command ? String(ri.command) : (ri?.description ? String(ri.description) : savedToolName ?? 'Background task'),
+                description: ri?.description ? String(ri.description) : undefined,
+                output: update.rawOutput !== undefined ? String(update.rawOutput) : '',
+                status: 'running' as const,
+                conversationId,
+                kind: isBgAgent ? 'agent' : 'bash'
+              }]
+            }
+            // Session already exists — update it
+            const updated = [...prev]
+            const session = { ...updated[idx] }
+            if (ri?.command) session.command = String(ri.command)
+            if (ri?.description) session.description = String(ri.description)
+            if (update.rawOutput !== undefined) session.output = String(update.rawOutput)
+            if (update.status) {
+              const st = String(update.status)
+              if (st === 'completed' || st === 'success') session.status = 'completed'
+              else if (st === 'error' || st === 'failed') session.status = 'error'
+            }
+            updated[idx] = session
+            return updated
+          })
+        } else {
+          // Update existing background session (subsequent updates after creation)
+          setBackgroundSessions(prev => {
+            const idx = prev.findIndex(s => s.id === toolCallId)
+            if (idx === -1) return prev
+            const updated = [...prev]
+            const session = { ...updated[idx] }
+            if (ri?.command) session.command = String(ri.command)
+            if (ri?.description) session.description = String(ri.description)
+            if (update.rawOutput !== undefined) session.output = String(update.rawOutput)
+            if (update.status) {
+              const st = String(update.status)
+              if (st === 'completed' || st === 'success') session.status = 'completed'
+              else if (st === 'error' || st === 'failed') session.status = 'error'
+            }
+            updated[idx] = session
+            return updated
+          })
         }
       } else if (sessionUpdate === 'usage_update') {
         // Context window and cost update
@@ -925,15 +995,19 @@ function App(): JSX.Element {
           })
         }
         if (cost || used) {
-          const prev = usageMap.current.get(conversationId) || {
-            totalCostUsd: 0, inputTokens: 0, outputTokens: 0,
-            cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0,
-            durationMs: 0, modelUsage: {}
-          }
-          usageMap.current.set(conversationId, {
-            ...prev,
-            inputTokens: used,
-            totalCostUsd: cost ? Number((cost as Record<string, unknown>).total) || prev.totalCostUsd : prev.totalCostUsd
+          setUsageMap(prev => {
+            const next = new Map(prev)
+            const existing = next.get(conversationId) || {
+              totalCostUsd: 0, inputTokens: 0, outputTokens: 0,
+              cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0,
+              durationMs: 0, modelUsage: {}
+            }
+            next.set(conversationId, {
+              ...existing,
+              inputTokens: used,
+              totalCostUsd: cost ? Number((cost as Record<string, unknown>).total) || existing.totalCostUsd : existing.totalCostUsd
+            })
+            return next
           })
         }
       } else if (sessionUpdate === 'prompt_complete') {
@@ -949,17 +1023,23 @@ function App(): JSX.Element {
         // Usage from prompt response
         const usage = update.usage as Record<string, unknown> | undefined
         if (usage) {
-          const prev = usageMap.current.get(conversationId) || {
-            totalCostUsd: 0, inputTokens: 0, outputTokens: 0,
-            cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0,
-            durationMs: 0, modelUsage: {}
-          }
-          usageMap.current.set(conversationId, {
-            ...prev,
-            inputTokens: prev.inputTokens + (Number(usage.inputTokens) || 0),
-            outputTokens: prev.outputTokens + (Number(usage.outputTokens) || 0),
-            turns: prev.turns + 1,
-            durationMs: prev.durationMs + duration
+          setUsageMap(prev => {
+            const next = new Map(prev)
+            const existing = next.get(conversationId) || {
+              totalCostUsd: 0, inputTokens: 0, outputTokens: 0,
+              cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0,
+              durationMs: 0, modelUsage: {}
+            }
+            next.set(conversationId, {
+              ...existing,
+              inputTokens: existing.inputTokens + (Number(usage.inputTokens) || 0),
+              outputTokens: existing.outputTokens + (Number(usage.outputTokens) || 0),
+              cacheReadTokens: existing.cacheReadTokens + (Number(usage.cachedReadTokens) || 0),
+              cacheCreationTokens: existing.cacheCreationTokens + (Number(usage.cachedWriteTokens) || 0),
+              turns: existing.turns + 1,
+              durationMs: existing.durationMs + duration
+            })
+            return next
           })
         }
 
@@ -1356,7 +1436,7 @@ function App(): JSX.Element {
     messagesCache.current.delete(conversationId)
     planDrafts.current.delete(conversationId)
     planEntryDrafts.current.delete(conversationId)
-    usageMap.current.delete(conversationId)
+    setUsageMap(prev => { const next = new Map(prev); next.delete(conversationId); return next })
     finalTexts.current.delete(conversationId)
     convPermissionModes.current.delete(conversationId)
     setAlwaysAllowedTypesMap((prev) => { const next = new Map(prev); next.delete(conversationId); return next })
@@ -1711,6 +1791,7 @@ function App(): JSX.Element {
               })}
               onShowUsage={() => setUsageOpen(true)}
               contextTokens={activeConversationId ? (contextTokensMap.get(activeConversationId) || 0) : 0}
+              conversationUsage={activeConversationId ? (usageMap.get(activeConversationId) || null) : null}
               apiMode={apiMode}
               onApiModeChange={setApiMode}
               apiProvider={apiProvider}
@@ -1733,13 +1814,15 @@ function App(): JSX.Element {
               onToggleTerminal={() => setTerminalOpen((prev) => !prev)}
               shellSession={shellSession}
               onShellSession={setShellSession}
+              backgroundSessions={backgroundSessions}
+              onCloseBackgroundSession={(id) => setBackgroundSessions(prev => prev.filter(s => s.id !== id))}
               alwaysAllowedTypes={currentAlwaysAllowed}
               onToggleAlwaysAllowed={handleToggleAlwaysAllowed}
             />
             <UsageDialog
               open={usageOpen}
               onOpenChange={setUsageOpen}
-              usage={activeConversationId ? (usageMap.current.get(activeConversationId) || null) : null}
+              usage={activeConversationId ? (usageMap.get(activeConversationId) || null) : null}
               conversationTitle={activeConversation?.title || null}
             />
           </>

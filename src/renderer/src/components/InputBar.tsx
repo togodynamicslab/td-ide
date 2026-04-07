@@ -22,7 +22,9 @@ import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs'
 import { cn } from '@/lib/utils'
 import ShellSessionBar from './ShellSessionBar'
-import type { ModelId, EffortLevel, PermissionMode, ImageAttachment, ApiMode, ApiProvider } from '../App'
+import BackgroundCommandBar from './BackgroundCommandBar'
+import type { BackgroundSession } from './BackgroundCommandBar'
+import type { ModelId, EffortLevel, PermissionMode, ImageAttachment, ApiMode, ApiProvider, ConversationUsage } from '../App'
 
 interface InputBarProps {
   conversationId: string | null
@@ -56,6 +58,7 @@ interface InputBarProps {
   customModel: string
   onCustomModelChange: (model: string) => void
   contextTokens: number
+  conversationUsage: ConversationUsage | null
   gitBranch: string | null
   gitDiffStats: { additions: number; deletions: number }
   onCommitChanges: () => void
@@ -70,6 +73,8 @@ interface InputBarProps {
   onToggleTerminal: () => void
   shellSession: { id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null
   onShellSession: (session: { id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null) => void
+  backgroundSessions: BackgroundSession[]
+  onCloseBackgroundSession: (id: string) => void
   alwaysAllowedTypes: Set<string>
   onToggleAlwaysAllowed: (actionType: string) => void
 }
@@ -904,11 +909,12 @@ function InputBar({
   onShowUsage,
   apiMode, onApiModeChange, apiProvider, onApiProviderChange,
   apiKey, onApiKeyChange, customModel, onCustomModelChange,
-  contextTokens, gitBranch, gitDiffStats, onCommitChanges,
+  contextTokens, conversationUsage, gitBranch, gitDiffStats, onCommitChanges,
   projectPath, onBranchChange, worktreePath, messageHistory,
   onCreateWorktree, onSelectWorktree, onRemoveWorktree,
   terminalOpen, onToggleTerminal,
   shellSession, onShellSession,
+  backgroundSessions, onCloseBackgroundSession,
   alwaysAllowedTypes, onToggleAlwaysAllowed
 }: InputBarProps): JSX.Element {
   const [text, setText] = useState('')
@@ -1409,6 +1415,17 @@ function InputBar({
             </div>
           </div>
         )}
+        {/* Background command bars (Claude's run_in_background Bash/Agent calls) */}
+        {backgroundSessions.filter(s => s.conversationId === conversationId).map(session => (
+          <div key={session.id} className="px-6 pb-2">
+            <div className="max-w-3xl mx-auto">
+              <BackgroundCommandBar
+                session={session}
+                onClose={onCloseBackgroundSession}
+              />
+            </div>
+          </div>
+        ))}
         <div className="px-6 py-3">
         <div className="max-w-3xl mx-auto">
           <form onSubmit={handleSubmit} className="w-full">
@@ -1764,44 +1781,73 @@ function InputBar({
                     </div>
                   )}
 
-                  {/* Context usage indicator */}
-                  {contextTokens > 0 && (() => {
+                  {/* Context usage indicator — always visible */}
+                  {(() => {
                     const ctx = getContextStatus(contextTokens, selectedModel)
-                    if (ctx.level === 'ok') return null
+                    const limit = MODEL_CONTEXT_LIMITS[selectedModel] || 200_000
                     return (
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <div className={cn('flex items-center gap-1 text-xs px-2 cursor-default', ctx.color)}>
-                            {ctx.level === 'critical' ? (
-                              <AlertTriangle className="h-3 w-3" />
-                            ) : (
-                              <Gauge className="h-3 w-3" />
-                            )}
-                            <div className="flex items-center gap-1">
-                              <span>{Math.round(ctx.percent)}%</span>
-                              <div className="w-12 h-1.5 rounded-full bg-td-border overflow-hidden">
-                                <div
-                                  className={cn(
-                                    'h-full rounded-full transition-all',
-                                    ctx.level === 'critical' ? 'bg-red-400' :
-                                    ctx.level === 'warning' ? 'bg-orange-400' :
-                                    'bg-yellow-400'
-                                  )}
-                                  style={{ width: `${ctx.percent}%` }}
-                                />
-                              </div>
+                          <div className={cn('flex items-center gap-1 text-[10px] px-1.5 cursor-default', ctx.color)}>
+                            <Gauge className="h-3 w-3 shrink-0" />
+                            <span className="whitespace-nowrap">{formatContext(contextTokens)}/{formatContext(limit)}</span>
+                            <div className="w-10 h-1 rounded-full bg-td-border overflow-hidden">
+                              <div
+                                className={cn(
+                                  'h-full rounded-full transition-all',
+                                  ctx.level === 'critical' ? 'bg-red-400' :
+                                  ctx.level === 'warning' ? 'bg-orange-400' :
+                                  ctx.level === 'moderate' ? 'bg-yellow-400' :
+                                  'bg-emerald-400/60'
+                                )}
+                                style={{ width: `${Math.max(ctx.percent, 1)}%` }}
+                              />
                             </div>
                           </div>
                         </TooltipTrigger>
-                        <TooltipContent side="top">
-                          <div className="text-xs">
-                            <p className="font-medium">{ctx.label}</p>
-                            <p className="text-td-muted">{formatContext(contextTokens)} / {formatContext(MODEL_CONTEXT_LIMITS[selectedModel] || 200_000)} tokens</p>
+                        <TooltipContent side="top" className="max-w-[280px]">
+                          <div className="text-xs space-y-1.5">
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="font-medium">Context</span>
+                              <span className={ctx.color}>{formatContext(contextTokens)} / {formatContext(limit)} ({Math.round(ctx.percent)}%)</span>
+                            </div>
+                            {/* Progress bar */}
+                            <div className="w-full h-1.5 rounded-full bg-td-border overflow-hidden">
+                              <div
+                                className={cn(
+                                  'h-full rounded-full transition-all',
+                                  ctx.level === 'critical' ? 'bg-red-400' :
+                                  ctx.level === 'warning' ? 'bg-orange-400' :
+                                  ctx.level === 'moderate' ? 'bg-yellow-400' :
+                                  'bg-emerald-400/60'
+                                )}
+                                style={{ width: `${Math.max(ctx.percent, 1)}%` }}
+                              />
+                            </div>
+                            {/* Token breakdown */}
+                            {conversationUsage && (
+                              <div className="border-t border-td-border pt-1.5 space-y-0.5 text-td-muted">
+                                <div className="flex justify-between"><span>Input</span><span className="text-td-text">{formatContext(conversationUsage.inputTokens)}</span></div>
+                                <div className="flex justify-between"><span>Output</span><span className="text-td-text">{formatContext(conversationUsage.outputTokens)}</span></div>
+                                {conversationUsage.cacheReadTokens > 0 && (
+                                  <div className="flex justify-between"><span>Cache read</span><span className="text-td-text">{formatContext(conversationUsage.cacheReadTokens)}</span></div>
+                                )}
+                                {conversationUsage.cacheCreationTokens > 0 && (
+                                  <div className="flex justify-between"><span>Cache write</span><span className="text-td-text">{formatContext(conversationUsage.cacheCreationTokens)}</span></div>
+                                )}
+                                {conversationUsage.turns > 0 && (
+                                  <div className="flex justify-between"><span>Turns</span><span className="text-td-text">{conversationUsage.turns}</span></div>
+                                )}
+                                {conversationUsage.totalCostUsd > 0 && (
+                                  <div className="flex justify-between"><span>Cost (API equiv.)</span><span className="text-emerald-400">${conversationUsage.totalCostUsd < 0.01 ? conversationUsage.totalCostUsd.toFixed(4) : conversationUsage.totalCostUsd.toFixed(2)}</span></div>
+                                )}
+                              </div>
+                            )}
                             {ctx.level === 'critical' && (
-                              <p className="text-red-400 mt-1">Context nearly full — start a new chat to avoid issues</p>
+                              <p className="text-red-400 border-t border-td-border pt-1">Context nearly full — start a new chat</p>
                             )}
                             {ctx.level === 'warning' && (
-                              <p className="text-orange-400 mt-1">Consider starting a new chat soon</p>
+                              <p className="text-orange-400 border-t border-td-border pt-1">Consider starting a new chat soon</p>
                             )}
                           </div>
                         </TooltipContent>
