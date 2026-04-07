@@ -8,7 +8,7 @@
   },
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "electron-vite dev -- --no-sandbox",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps",
@@ -52,6 +52,13 @@
     "remark-math": "^6.0.0",
     "tailwind-merge": "^3.5.0",
     "tailwindcss-animate": "^1.0.7"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "better-sqlite3",
+      "node-pty"
+    ]
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
