@@ -886,6 +886,7 @@ function App(): JSX.Element {
           updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
         }
       } else if (sessionUpdate === 'tool_call') {
+        console.log('[bg-debug tool_call]', JSON.stringify(update))
         const toolCallId = update.toolCallId as string || `tool-${Date.now()}`
         const title = update.title as string || 'Tool'
         if (title === EXIT_PLAN_MODE_TITLE) return // Handled by Plan Sidebar
@@ -911,6 +912,7 @@ function App(): JSX.Element {
           toolNameMapRef.current.set(toolCallId, toolName)
         }
       } else if (sessionUpdate === 'tool_call_update') {
+        console.log('[bg-debug tool_call_update]', JSON.stringify(update))
         // Update to an existing tool call (results, status changes)
         const toolCallId = update.toolCallId as string
         const existing = buf.tools.find((t) => t.id === toolCallId)

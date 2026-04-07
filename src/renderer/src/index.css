@@ -217,3 +217,140 @@ code[class*="language-"],
 pre[class*="language-"] {
   text-shadow: none !important;
 }
+
+/* ── Rich input (TipTap) ── */
+.rich-input-wrapper .ProseMirror {
+  background: transparent;
+  outline: none;
+  caret-color: rgb(var(--td-text));
+}
+
+.rich-input-wrapper .tiptap {
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgb(var(--td-text));
+  padding: 0;
+}
+
+.rich-input-wrapper .tiptap p {
+  margin: 0;
+}
+
+.rich-input-wrapper .tiptap p + p {
+  margin-top: 0.25em;
+}
+
+.rich-input-wrapper .tiptap h1,
+.rich-input-wrapper .tiptap h2,
+.rich-input-wrapper .tiptap h3 {
+  font-weight: 600;
+  margin: 0.3em 0 0.15em;
+  color: rgb(var(--td-text));
+}
+
+.rich-input-wrapper .tiptap h1 { font-size: 1.2em; }
+.rich-input-wrapper .tiptap h2 { font-size: 1.1em; }
+.rich-input-wrapper .tiptap h3 { font-size: 1.05em; }
+
+.rich-input-wrapper .tiptap ul,
+.rich-input-wrapper .tiptap ol {
+  padding-left: 1.4em;
+  margin: 0.2em 0;
+}
+
+.rich-input-wrapper .tiptap li {
+  margin: 0;
+}
+
+.rich-input-wrapper .tiptap li p {
+  margin: 0;
+}
+
+.rich-input-wrapper .tiptap blockquote {
+  border-left: 2px solid rgb(var(--td-accent));
+  padding-left: 0.75em;
+  margin: 0.25em 0;
+  color: rgb(var(--td-text-tertiary));
+  font-style: italic;
+}
+
+.rich-input-wrapper .tiptap .rich-input-inline-code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: rgb(var(--td-surface));
+  border: 1px solid rgb(var(--td-border));
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  font-size: 0.9em;
+  color: rgb(var(--td-code-inline));
+}
+
+.rich-input-wrapper .tiptap pre.rich-input-code-block {
+  background: rgb(var(--td-surface)) !important;
+  border: 1px solid rgb(var(--td-border));
+  border-radius: 6px;
+  padding: 0.6em 0.8em;
+  margin: 0.3em 0;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-x: auto;
+  color: rgb(var(--td-text));
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.rich-input-wrapper .tiptap pre.rich-input-code-block code {
+  background: transparent !important;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.rich-input-wrapper .tiptap hr {
+  border: none;
+  border-top: 1px solid rgb(var(--td-border));
+  margin: 0.5em 0;
+}
+
+.rich-input-wrapper .tiptap strong {
+  font-weight: 600;
+  color: rgb(var(--td-text));
+}
+
+.rich-input-wrapper .tiptap em {
+  color: rgb(var(--td-text-secondary));
+}
+
+.rich-input-wrapper .tiptap s {
+  color: rgb(var(--td-muted));
+}
+
+/* Selection */
+.rich-input-wrapper .tiptap ::selection {
+  background: rgb(var(--td-accent) / 0.3);
+}
+
+/* Placeholder */
+.rich-input-wrapper .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: rgb(var(--td-muted));
+  pointer-events: none;
+  height: 0;
+}
+
+/* List markers */
+.rich-input-wrapper .tiptap ul {
+  list-style-type: disc;
+}
+
+.rich-input-wrapper .tiptap ol {
+  list-style-type: decimal;
+}
+
+.rich-input-wrapper .tiptap li::marker {
+  color: rgb(var(--td-muted));
+}

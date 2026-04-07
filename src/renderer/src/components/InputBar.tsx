@@ -7,7 +7,7 @@ import {
   Moon, Settings, FileCode, Minimize2, FolderOpen,
   Terminal, Zap, Info, Check, Timer, RefreshCw,
   Code2, Bug, Keyboard, BookOpen, Archive, GitFork, BarChart3,
-  Key, Eye, EyeOff, ChevronDown, CircleCheck, Cpu, Search, DollarSign,
+  Key, Eye, ChevronDown, CircleCheck, Cpu, Search, DollarSign,
   AlertTriangle, GitBranch, ArrowLeft, ArrowUp, Trash2,
   Pencil, FilePlus2, TerminalSquare, Wrench
 } from 'lucide-react'
@@ -21,6 +21,8 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from './ui/t
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs'
 import { cn } from '@/lib/utils'
+import RichInput from './RichInput'
+import type { RichInputHandle } from './RichInput'
 import ShellSessionBar from './ShellSessionBar'
 import BackgroundCommandBar from './BackgroundCommandBar'
 import type { BackgroundSession } from './BackgroundCommandBar'
@@ -923,7 +925,7 @@ function InputBar({
   const [slashIdx, setSlashIdx] = useState(0)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
   // shellSession is now lifted to App.tsx via props (shellSession, onShellSession)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const richInputRef = useRef<RichInputHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const drafts = useRef<Map<string, Draft>>(new Map())
@@ -1237,14 +1239,14 @@ function InputBar({
       item.cmd.action(item.key)
     } else if (item.cmd.subOptions) {
       setText(`/${item.cmd.name} `)
-      textareaRef.current?.focus()
+      richInputRef.current?.focus()
       return
     } else {
       // Pass full rest of text for commands that accept inline args (e.g. /loop 5m ...)
       item.cmd.action(slashParse?.rest || undefined)
     }
     setText('')
-    textareaRef.current?.focus()
+    richInputRef.current?.focus()
   }
 
   // Save/restore drafts when conversation changes
@@ -1267,7 +1269,7 @@ function InputBar({
     prevConvId.current = conversationId
   }, [conversationId])
 
-  useEffect(() => { textareaRef.current?.focus() }, [conversationId])
+  useEffect(() => { richInputRef.current?.focus() }, [conversationId])
 
   const addFiles = useCallback(async (files: FileList | File[]) => {
     const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'))
@@ -1297,7 +1299,7 @@ function InputBar({
       onShellSession({ id: `shell-${Date.now()}`, command: terminalMode.command, exitCode: null, conversationId: conversationId, scope: 'conversation' })
       setText('')
       drafts.current.delete(conversationId || '__new__')
-      if (textareaRef.current) textareaRef.current.style.height = 'auto'
+      // Rich input handles its own sizing
       return
     }
 
@@ -1311,10 +1313,10 @@ function InputBar({
     historyIndex.current = -1
     historyDraft.current = ''
     drafts.current.delete(conversationId || '__new__')
-    if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    // Rich input handles its own sizing
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: KeyboardEvent) => {
     // Slash menu navigation
     if (showSlashMenu) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => Math.min(i + 1, menuItems.length - 1)); return }
@@ -1325,8 +1327,8 @@ function InputBar({
 
     // History navigation — cursor at start for Up, at end for Down
     if (e.key === 'ArrowUp' && messageHistory.length > 0) {
-      const ta = textareaRef.current
-      if (ta && ta.selectionStart === 0 && ta.selectionEnd === 0) {
+      const ri = richInputRef.current
+      if (ri && ri.isCursorAtStart()) {
         e.preventDefault()
         if (historyIndex.current === -1) {
           historyDraft.current = text
@@ -1336,16 +1338,13 @@ function InputBar({
           historyIndex.current = nextIdx
           const msg = messageHistory[messageHistory.length - 1 - nextIdx]
           setText(msg)
-          // Pin cursor to start so the next ArrowUp fires immediately
-          requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = 0 })
         }
         return
       }
     }
     if (e.key === 'ArrowDown' && historyIndex.current >= 0) {
-      const ta = textareaRef.current
-      const atEnd = ta && ta.selectionStart === ta.value.length && ta.selectionEnd === ta.value.length
-      if (atEnd) {
+      const ri = richInputRef.current
+      if (ri && ri.isCursorAtEnd()) {
         e.preventDefault()
         const nextIdx = historyIndex.current - 1
         if (nextIdx < 0) {
@@ -1355,8 +1354,6 @@ function InputBar({
           historyIndex.current = nextIdx
           setText(messageHistory[messageHistory.length - 1 - nextIdx])
         }
-        // Pin cursor to end so the next ArrowDown fires immediately
-        requestAnimationFrame(() => { if (ta) ta.selectionStart = ta.selectionEnd = ta.value.length })
         return
       }
     }
@@ -1370,8 +1367,9 @@ function InputBar({
     }
   }
 
-  const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items
+  const handlePaste = useCallback(async (e: ClipboardEvent) => {
+    const items = e.clipboardData?.items
+    if (!items) return
     const imageItems = Array.from(items).filter((item) => item.type.startsWith('image/'))
     if (imageItems.length === 0) return
     e.preventDefault()
@@ -1385,13 +1383,7 @@ function InputBar({
     await addFiles(e.dataTransfer.files)
   }, [addFiles])
 
-  // Auto-resize textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 192) + 'px'
-    }
-  }, [text])
+  // Rich input handles its own auto-sizing
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -1640,19 +1632,18 @@ function InputBar({
                 </div>
               )}
 
-              {/* Textarea */}
-              <textarea
-                ref={textareaRef}
+              {/* Rich text input */}
+              <RichInput
+                ref={richInputRef}
                 value={text}
-                onChange={(e) => setText(e.target.value)}
+                onChange={setText}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
                 placeholder={permissionMode === 'plan' ? 'Describe what you want to plan...' : 'Type / for commands, or ask anything...'}
                 className={cn(
-                  'w-full bg-transparent px-4 pt-3 pb-2 text-sm text-td-text placeholder-td-muted resize-none outline-none min-h-[64px] max-h-[192px]',
+                  'w-full px-4 pt-3 pb-2',
                   isDragging && 'hidden'
                 )}
-                rows={1}
               />
 
               {/* Footer */}
