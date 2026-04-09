@@ -26,6 +26,8 @@ import type { RichInputHandle } from './RichInput'
 import ShellSessionBar from './ShellSessionBar'
 import BackgroundCommandBar from './BackgroundCommandBar'
 import type { BackgroundSession } from './BackgroundCommandBar'
+import AgentOrchestrationPanel from './AgentOrchestrationPanel'
+import type { AgentTask } from './AgentOrchestrationPanel'
 import type { ModelId, EffortLevel, PermissionMode, ImageAttachment, ApiMode, ApiProvider, ConversationUsage } from '../App'
 
 interface InputBarProps {
@@ -77,6 +79,10 @@ interface InputBarProps {
   onShellSession: (session: { id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null) => void
   backgroundSessions: BackgroundSession[]
   onCloseBackgroundSession: (id: string) => void
+  agentTasks: AgentTask[]
+  onDismissAgentTask: (id: string) => void
+  onClearCompletedAgentTasks: () => void
+  onInjectDemoAgentTasks?: () => void
   alwaysAllowedTypes: Set<string>
   onToggleAlwaysAllowed: (actionType: string) => void
 }
@@ -917,6 +923,7 @@ function InputBar({
   terminalOpen, onToggleTerminal,
   shellSession, onShellSession,
   backgroundSessions, onCloseBackgroundSession,
+  agentTasks, onDismissAgentTask, onClearCompletedAgentTasks, onInjectDemoAgentTasks,
   alwaysAllowedTypes, onToggleAlwaysAllowed
 }: InputBarProps): JSX.Element {
   const [text, setText] = useState('')
@@ -1157,7 +1164,18 @@ function InputBar({
       category: 'info' as SlashCategory,
       action: () => {} // just shows the menu
     },
-  ], [onModelChange, onEffortChange, onPermissionModeChange, onNewChat, onClearConversation, onArchiveConversation, onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile, onSend, onShowUsage, selectedModel, effortLevel, permissionMode, disabledTools])
+    {
+      name: 'demo-agents',
+      description: 'Preview agent orchestration panel with mock data',
+      icon: <Cpu className="h-3.5 w-3.5 text-orange-400" />,
+      category: 'info' as SlashCategory,
+      action: () => {
+        onInjectDemoAgentTasks?.()
+        setStatusMsg('Injected demo agent tasks')
+        setTimeout(() => setStatusMsg(null), 2000)
+      }
+    },
+  ], [onModelChange, onEffortChange, onPermissionModeChange, onNewChat, onClearConversation, onArchiveConversation, onOpenSettings, onOpenInExplorer, onOpenInTerminal, onAddFile, onSend, onShowUsage, selectedModel, effortLevel, permissionMode, disabledTools, onInjectDemoAgentTasks])
 
   // Parse slash input
   const slashParse = useMemo(() => {
@@ -1407,8 +1425,20 @@ function InputBar({
             </div>
           </div>
         )}
-        {/* Background command bars (Claude's run_in_background Bash/Agent calls) */}
-        {backgroundSessions.filter(s => s.conversationId === conversationId).map(session => (
+        {/* Agent orchestration panel */}
+        {agentTasks.length > 0 && (
+          <div className="px-6 pb-2">
+            <div className="max-w-3xl mx-auto">
+              <AgentOrchestrationPanel
+                tasks={agentTasks}
+                onDismiss={onDismissAgentTask}
+                onClearCompleted={onClearCompletedAgentTasks}
+              />
+            </div>
+          </div>
+        )}
+        {/* Background command bars (Bash run_in_background calls) */}
+        {backgroundSessions.filter(s => s.conversationId === conversationId && s.kind === 'bash').map(session => (
           <div key={session.id} className="px-6 pb-2">
             <div className="max-w-3xl mx-auto">
               <BackgroundCommandBar

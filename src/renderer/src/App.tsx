@@ -16,6 +16,7 @@ import DiffSidebar from './components/DiffSidebar'
 import ToolDetailSidebar from './components/ToolDetailSidebar'
 import ConversationTabs from './components/ConversationTabs'
 import type { BackgroundSession } from './components/BackgroundCommandBar'
+import type { AgentTask } from './components/AgentOrchestrationPanel'
 import { useKeyboardShortcuts, mergeShortcuts, DEFAULT_SHORTCUTS, type ShortcutBinding, type ShortcutModifiers } from './hooks/useKeyboardShortcuts'
 
 export interface ToolBlock {
@@ -197,6 +198,7 @@ function App(): JSX.Element {
   const [terminalPanelHeight, setTerminalPanelHeight] = useState(300)
   const [shellSession, setShellSession] = useState<{ id: string; command: string; exitCode: number | null; conversationId: string | null; scope: 'conversation' | 'global' } | null>(null)
   const [backgroundSessions, setBackgroundSessions] = useState<BackgroundSession[]>([])
+  const [agentTasks, setAgentTasks] = useState<AgentTask[]>([])
   const [useWorktree, setUseWorktree] = useState(false)
   const [interruptedConvIds, setInterruptedConvIds] = useState<Set<string>>(new Set())
   const [usageOpen, setUsageOpen] = useState(false)
@@ -911,6 +913,24 @@ function App(): JSX.Element {
         if (toolName) {
           toolNameMapRef.current.set(toolCallId, toolName)
         }
+
+        // Create agent task entry for Agent tool calls
+        if (toolName === 'Agent') {
+          const ri = rawInput as Record<string, unknown>
+          setAgentTasks(prev => {
+            if (prev.some(t => t.id === toolCallId)) return prev
+            return [...prev, {
+              id: toolCallId,
+              description: String(ri.description || 'Agent task'),
+              subagentType: String(ri.subagent_type || 'general-purpose'),
+              model: ri.model ? String(ri.model) : undefined,
+              status: 'running' as const,
+              output: '',
+              startedAt: Date.now(),
+              conversationId
+            }]
+          })
+        }
       } else if (sessionUpdate === 'tool_call_update') {
         console.log('[bg-debug tool_call_update]', JSON.stringify(update))
         // Update to an existing tool call (results, status changes)
@@ -930,59 +950,96 @@ function App(): JSX.Element {
           updateLastAssistantMessage(conversationId, buf.text, buf.tools, buf.reasoning, buf.contentBlocks)
         }
 
-        // Create or update background session — only for run_in_background Bash or Agent tools
+        // Route updates: Agent tool calls → agentTasks, Bash background → backgroundSessions
         const ri = update.rawInput as Record<string, unknown> | undefined
         const savedToolName = toolNameMapRef.current.get(toolCallId)
-        const isBgBash = savedToolName === 'Bash' && ri?.run_in_background === true
-        const isBgAgent = savedToolName === 'Agent' && ri?.run_in_background === true
 
-        if (isBgBash || isBgAgent) {
-          setBackgroundSessions(prev => {
-            const idx = prev.findIndex(s => s.id === toolCallId)
+        if (savedToolName === 'Agent') {
+          // Update agent task in the orchestration panel
+          setAgentTasks(prev => {
+            const idx = prev.findIndex(t => t.id === toolCallId)
             if (idx === -1) {
-              // First update with run_in_background confirmed — create session
+              // Agent task not yet created (rare — create it now)
               return [...prev, {
                 id: toolCallId,
-                command: ri?.command ? String(ri.command) : (ri?.description ? String(ri.description) : savedToolName ?? 'Background task'),
-                description: ri?.description ? String(ri.description) : undefined,
-                output: update.rawOutput !== undefined ? String(update.rawOutput) : '',
+                description: ri?.description ? String(ri.description) : 'Agent task',
+                subagentType: ri?.subagent_type ? String(ri.subagent_type) : 'general-purpose',
+                model: ri?.model ? String(ri.model) : undefined,
                 status: 'running' as const,
-                conversationId,
-                kind: isBgAgent ? 'agent' : 'bash'
+                output: update.rawOutput !== undefined ? String(update.rawOutput) : '',
+                startedAt: Date.now(),
+                conversationId
               }]
             }
-            // Session already exists — update it
             const updated = [...prev]
-            const session = { ...updated[idx] }
-            if (ri?.command) session.command = String(ri.command)
-            if (ri?.description) session.description = String(ri.description)
-            if (update.rawOutput !== undefined) session.output = String(update.rawOutput)
+            const task = { ...updated[idx] }
+            if (ri?.description) task.description = String(ri.description)
+            if (ri?.subagent_type) task.subagentType = String(ri.subagent_type)
+            if (ri?.model) task.model = String(ri.model)
+            if (update.rawOutput !== undefined) task.output = String(update.rawOutput)
             if (update.status) {
               const st = String(update.status)
-              if (st === 'completed' || st === 'success') session.status = 'completed'
-              else if (st === 'error' || st === 'failed') session.status = 'error'
+              if (st === 'completed' || st === 'success') {
+                task.status = 'completed'
+                task.completedAt = Date.now()
+              } else if (st === 'error' || st === 'failed') {
+                task.status = 'error'
+                task.completedAt = Date.now()
+              }
             }
-            updated[idx] = session
+            updated[idx] = task
             return updated
           })
         } else {
-          // Update existing background session (subsequent updates after creation)
-          setBackgroundSessions(prev => {
-            const idx = prev.findIndex(s => s.id === toolCallId)
-            if (idx === -1) return prev
-            const updated = [...prev]
-            const session = { ...updated[idx] }
-            if (ri?.command) session.command = String(ri.command)
-            if (ri?.description) session.description = String(ri.description)
-            if (update.rawOutput !== undefined) session.output = String(update.rawOutput)
-            if (update.status) {
-              const st = String(update.status)
-              if (st === 'completed' || st === 'success') session.status = 'completed'
-              else if (st === 'error' || st === 'failed') session.status = 'error'
-            }
-            updated[idx] = session
-            return updated
-          })
+          // Background Bash sessions
+          const isBgBash = savedToolName === 'Bash' && ri?.run_in_background === true
+
+          if (isBgBash) {
+            setBackgroundSessions(prev => {
+              const idx = prev.findIndex(s => s.id === toolCallId)
+              if (idx === -1) {
+                return [...prev, {
+                  id: toolCallId,
+                  command: ri?.command ? String(ri.command) : (savedToolName ?? 'Background task'),
+                  description: ri?.description ? String(ri.description) : undefined,
+                  output: update.rawOutput !== undefined ? String(update.rawOutput) : '',
+                  status: 'running' as const,
+                  conversationId,
+                  kind: 'bash' as const
+                }]
+              }
+              const updated = [...prev]
+              const session = { ...updated[idx] }
+              if (ri?.command) session.command = String(ri.command)
+              if (ri?.description) session.description = String(ri.description)
+              if (update.rawOutput !== undefined) session.output = String(update.rawOutput)
+              if (update.status) {
+                const st = String(update.status)
+                if (st === 'completed' || st === 'success') session.status = 'completed'
+                else if (st === 'error' || st === 'failed') session.status = 'error'
+              }
+              updated[idx] = session
+              return updated
+            })
+          } else {
+            // Update existing background session (subsequent updates after creation)
+            setBackgroundSessions(prev => {
+              const idx = prev.findIndex(s => s.id === toolCallId)
+              if (idx === -1) return prev
+              const updated = [...prev]
+              const session = { ...updated[idx] }
+              if (ri?.command) session.command = String(ri.command)
+              if (ri?.description) session.description = String(ri.description)
+              if (update.rawOutput !== undefined) session.output = String(update.rawOutput)
+              if (update.status) {
+                const st = String(update.status)
+                if (st === 'completed' || st === 'success') session.status = 'completed'
+                else if (st === 'error' || st === 'failed') session.status = 'error'
+              }
+              updated[idx] = session
+              return updated
+            })
+          }
         }
       } else if (sessionUpdate === 'usage_update') {
         // Context window and cost update
@@ -1818,6 +1875,18 @@ function App(): JSX.Element {
               onShellSession={setShellSession}
               backgroundSessions={backgroundSessions}
               onCloseBackgroundSession={(id) => setBackgroundSessions(prev => prev.filter(s => s.id !== id))}
+              agentTasks={agentTasks.filter(t => t.conversationId === activeConversationId)}
+              onDismissAgentTask={(id) => setAgentTasks(prev => prev.filter(t => t.id !== id))}
+              onClearCompletedAgentTasks={() => setAgentTasks(prev => prev.filter(t => t.status === 'running'))}
+              onInjectDemoAgentTasks={() => {
+                const convId = activeConversationId || 'demo'
+                const now = Date.now()
+                setAgentTasks(prev => [...prev,
+                  { id: `demo-explore-${now}`, description: 'Explore codebase structure and architecture', subagentType: 'Explore', model: 'sonnet', status: 'running', output: 'Scanning src/ directory...\nFound 42 TypeScript files across 6 modules.\nAnalyzing component dependency graph...', startedAt: now - 12000, conversationId: convId },
+                  { id: `demo-plan-${now}`, description: 'Design authentication migration strategy', subagentType: 'Plan', status: 'running', output: 'Reviewing current auth middleware...\nIdentified 3 session storage patterns that need updating.', startedAt: now - 5000, conversationId: convId },
+                  { id: `demo-worker-${now}`, description: 'Write comprehensive unit tests for auth module', subagentType: 'general-purpose', model: 'opus', status: 'completed', output: 'Created 3 test suites with 24 test cases.\nAll tests passing.\n\nFiles created:\n  src/auth/__tests__/jwt.test.ts\n  src/auth/__tests__/middleware.test.ts\n  src/auth/__tests__/session.test.ts', startedAt: now - 20000, completedAt: now - 8000, conversationId: convId },
+                ])
+              }}
               alwaysAllowedTypes={currentAlwaysAllowed}
               onToggleAlwaysAllowed={handleToggleAlwaysAllowed}
             />

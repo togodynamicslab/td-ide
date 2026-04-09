@@ -205,6 +205,41 @@ body {
   animation: shimmer 2s ease-in-out infinite;
 }
 
+/* ── Agent orchestration panel ── */
+
+@keyframes agent-panel-slide-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.agent-panel-enter {
+  animation: agent-panel-slide-in 0.25s ease-out;
+}
+
+@keyframes agent-progress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+.agent-progress-bar {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(var(--td-accent) / 0.5) 40%,
+    rgb(var(--td-accent) / 0.8) 50%,
+    rgb(var(--td-accent) / 0.5) 60%,
+    transparent 100%
+  );
+  width: 50%;
+  animation: agent-progress 1.5s ease-in-out infinite;
+}
+
 /* Markdown image rendering */
 .break-words img {
   max-width: 100%;
